@@ -1,6 +1,6 @@
-(ns clj-mavlink.core-test
+(ns mavlink.core-test
   (:require [clojure.test :refer :all]
-            [clj-mavlink.core :refer :all]))
+            [mavlink.core :refer :all]))
 
 (deftest a-test
   (testing "FIXME, I fail."
