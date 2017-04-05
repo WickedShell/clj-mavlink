@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<mavlink>
+  <include>common.xml</include>
+  <!-- vendors -->
+  <include>uAvionix.xml</include>
+  <dialect>2</dialect>
+  <!-- note that APM specific messages should use the command id range from 150 to 250, to leave plenty of room for growth of common.xml If you prototype a message here, then you should consider if it is general enough to move into common.xml later -->
+  <enums>
+    <enum name="ACCELCAL_VEHICLE_POS">
+      <entry name="ACCELCAL_VEHICLE_POS_LEVEL" value="1"/>
+      <entry name="ACCELCAL_VEHICLE_POS_LEFT" value="2"/>
+      <entry name="ACCELCAL_VEHICLE_POS_RIGHT" value="3"/>
+      <entry name="ACCELCAL_VEHICLE_POS_NOSEDOWN" value="4"/>
+      <entry name="ACCELCAL_VEHICLE_POS_NOSEUP" value="5"/>
+      <entry name="ACCELCAL_VEHICLE_POS_BACK" value="6"/>
+    </enum>
+  </enums>
+  <messages>
+    <message id="150" name="SENSOR_OFFSETS">
+      <description>Offsets and calibrations values for hardware sensors. This makes it easier to debug the calibration process.</description>
+      <field name="mag_ofs_x" type="int16_t">magnetometer X offset</field>
+      <field name="mag_ofs_y" type="int16_t">magnetometer Y offset</field>
+      <field name="mag_ofs_z" type="int16_t">magnetometer Z offset</field>
+      <field name="mag_declination" type="float">magnetic declination (radians)</field>
+      <field name="raw_press" type="int32_t">raw pressure from barometer</field>
+      <field name="raw_temp" type="int32_t">raw temperature from barometer</field>
+      <field name="gyro_cal_x" type="float">gyro X calibration</field>
+      <field name="gyro_cal_y" type="float">gyro Y calibration</field>
+      <field name="gyro_cal_z" type="float">gyro Z calibration</field>
+      <field name="accel_cal_x" type="float">accel X calibration</field>
+      <field name="accel_cal_y" type="float">accel Y calibration</field>
+      <field name="accel_cal_z" type="float">accel Z calibration</field>
+    </message>
+  </messages>
+</mavlink>
