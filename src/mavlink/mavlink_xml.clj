@@ -11,15 +11,9 @@
 
 (use 'clojure.pprint)
 
-(def ^:const MAX-MESSAGE-SIZE 300)  ; the maximum message size
+(def ^:const MAVLINK-VERSION 2)  ; FIXME
 
-(defn report-error
-  "Report errors, for now just print them. Any number of arguments that
-   can be passed to str maybe given. Return nil so this can be used to report the
-   error as well as return the error condition nil."
-  [data & s]
-  (throw (ex-info (str "ERROR: " (string/join " " s))
-                  data)))
+(def ^:const MAX-MESSAGE-SIZE 300)  ; the maximum message size
 
 (defn- keywordize
   "Take a string, replace all _ with - and put it in lower case,
@@ -28,8 +22,8 @@
   [^String s]
   (if s
     (keyword (string/lower-case (string/replace s \_ \-)))
-    (report-error {:cause :null-pointer}
-                  "keywordize: null pointer")))
+    (throw (ex-info "keywordize: null pointer"
+                    {:cause :null-pointer}))))
 
 (defn- get-value
   "Take a string, if it is nil, return it, otherwise convert the string to a long
@@ -40,8 +34,8 @@
     (try
       (Long/valueOf s)
       (catch Exception e
-        (report-error {:cause :string-not-number}
-                      identifier ">" s "<" "failed to convert to long.")))))
+        (throw (ex-info (str identifier " >" s "< failed to convert to long.")
+                        {:cause :string-not-number}))))))
 
 (defn- get-type
   "Take a type string from the XML convert to the base type.
@@ -64,8 +58,40 @@
   [enums v]
   (get enums v v))
 
+(defn get-fields
+  "Returns just the fields of a message; or nil if there are none.
+   While using extentions tag as a separator, this function looks to
+   the left of the tag, if there is no extensions tag, then all the fields are
+   returned."
+  [m]
+  (if-let [node (zip-xml/xml1-> m :extensions)]
+    (remove nil? 
+            (mapv #(when (= (:tag %) :field)
+                     (let [fld-name (-> % :attrs :name)
+                           type-name (-> % :attrs :type)
+                           enum-name (-> % :attrs :enum)]
+                       {:fld-name fld-name
+                        :name-key (keyword fld-name)
+                        :type-key (get-type type-name)
+                        :enum-type (when enum-name
+                                     (keywordize enum-name))
+                        :length (get-array-length type-name) }))
+                  (zip/lefts node)))
+    (vec
+      (zip-xml/xml-> m :field
+        (fn [f]
+          (let [fld-name (-> f first :attrs :name)
+                type-name (-> f first :attrs :type)
+                enum-name (-> f first :attrs :enum)]
+            {:fld-name fld-name
+             :name-key (keyword fld-name)
+             :type-key (get-type type-name)
+             :enum-type (when enum-name
+                          (keywordize enum-name))
+             :length (get-array-length type-name) }))))))
+
 (defn get-extension-fields
-  "Returns just the extension fields of a messages; or nil if there are none."
+  "Returns just the extension fields of a message; or nil if there are none."
   [m]
   (when-let [node (zip-xml/xml1-> m :extensions)]
     (when-let [ext-fields (zip/rights node)]
@@ -86,14 +112,63 @@
   "Take a vector of fields and return them in a vector sorted based on
    the order to place them in message."
   [fields]
-  (vec (sort #(let [priority1 (get-type-priority (:type-key %1))
-                    priority2 (get-type-priority (:type-key %2))]
-                  (< priority1 priority2))
-             fields)))
+  (when fields
+    (vec (sort #(let [priority1 (get-type-priority (:type-key %1))
+                      priority2 (get-type-priority (:type-key %2))]
+                    (< priority1 priority2))
+               fields))))
+
+(defn gen-encode-fn
+  "Generate the encode function for a field. Because they have the same structure
+   this function works on both regular fields and extension fields."
+  [{:keys [name-key type-key length] :as field}]
+  (let [write-fn (type-key write-payload)]
+    (if write-fn
+      (if length
+        (fn encode-it-array [payload message]
+          (let [value (name-key message)
+                num-missing (- length (count value))]
+            (doseq [fval value]
+              (write-fn payload fval))
+            (dotimes [i num-missing]
+              (write-fn payload (get-default-value type-key MAVLINK-VERSION)))))
+        (fn encode-it [payload message]
+          (write-fn payload (name-key message))))
+     (throw (ex-info (str "No function to write " type-key)
+                     {:cause :no-write-fn})))))
+
+(defn gen-decode-fn
+  "Generate the decode function for a field. Because they have the same structure
+   this function works on both regular fields and extension fields."
+  [{:keys [name-key type-key length enum-type] :as field} enums-by-group]
+  (let [read-fn (type-key read-payload)
+        enum-group (get enums-by-group enum-type) ]
+    (if-not read-fn
+      (throw (ex-info "Unknown type for read"
+                      {:cause :no-read-fn
+                       :type-key type-key
+                       :name-key name-key}))
+      (if length
+        (fn decode-it-array [buffer]
+          (let [new-array (reduce
+                            (fn [vr i] (conj vr (let [v (read-fn buffer)]
+                                                  (if enum-type
+                                                    (lookup-enum enum-group v)
+                                                    v))))
+                            []
+                            (range length))]
+            { name-key (if (= type-key :char)
+                         (.trim (new String ^"[B" (into-array Byte/TYPE new-array)))
+                         new-array) }))
+        (fn decode-it [buffer]
+          { name-key (let [v (read-fn buffer)]
+                       (if enum-type
+                         (lookup-enum enum-group v)
+                         v)) } )))))
 
 (defn get-mavlink
   "Return a mavlink map for one xml source."
-  [{:keys [system-id component-id descriptions mavlink-version] :as options} ^String file-name zipper]
+  [{:keys [system-id component-id descriptions] :as options} ^String file-name zipper]
  (let [enum-to-value
         (with-local-vars [last-value 0]
           (apply merge (zip-xml/xml-> zipper :mavlink :enums :enum :entry
@@ -123,32 +198,12 @@
                 (let [msg-name (-> m first :attrs :name)
                       msg-id (get-value (str "In " file-name " " msg-name " id")
                                             (-> m first :attrs :id))
-                      all-fields (vec
-                                   (zip-xml/xml-> m :field
-                                                  (fn[f]
-                                                    (let [fld-name (zip-xml/attr f :name)
-                                                          type-name (zip-xml/attr f :type)
-                                                          enum-name (zip-xml/attr f :enum)
-                                                          type-key (get-type type-name)]
-                                                      {:name-key (keyword fld-name)
-                                                       :fld-name fld-name
-                                                       :type-key type-key
-                                                       :enum-type (when enum-name
-                                                                    (keywordize enum-name))
-                                                       :length (get-array-length type-name)}))))
-                      ext-fields (get-extension-fields m)
-                      sorted-fields (sort-fields
-                                      (if (empty? ext-fields)
-                                        all-fields
-                                        (filterv (fn[m]
-                                                   (empty?
-                                                    (filter #(= (:name-key m)
-                                                                (:name-key %)) ext-fields)))
-                                                 all-fields)))
+                      fields (sort-fields (get-fields m))
+                      ext-fields (sort-fields (get-extension-fields m))
                       payload-size (apply + (map #(let [{:keys [type-key length]} %]
                                                     (* (type-key type-size) (or length 1)))
-                                                 sorted-fields))
-                      msg-magic-byte ; note that field names and their type names are used here
+                                                 fields))
+                      crc-seed ; note that field names and their type names are used here
                         (let [msg-seed (str msg-name " "
                                             (apply str
                                                    (map #(let [{:keys [fld-name type-key length]} %]
@@ -158,7 +213,7 @@
                                                                 fld-name " "
                                                                 (when length
                                                                   (char length))))
-                                                        sorted-fields)))
+                                                        fields)))
                               checksum (compute-checksum msg-seed)]
                           (bit-xor (bit-and checksum 0xFF)
                                    (bit-and (bit-shift-right checksum 8) 0xff)))
@@ -167,64 +222,24 @@
                                     (map #(let [{:keys [name-key type-key length]} %]
                                             (if length
                                               { name-key (get-default-array type-key length) }
-                                              { name-key (get-default-value type-key mavlink-version) }))
-                                         sorted-fields))
-                      encode-fns (mapv
-                                   #(let [{:keys [name-key type-key length]} %
-                                          write-fn (type-key write-payload)]
-                                      (if write-fn
-                                        (if length
-                                          (fn [payload message]
-                                            (let [value (name-key message)
-                                                  num-missing (- length (count value))]
-                                              (doseq [fval value]
-                                                (write-fn payload fval))
-                                              (dotimes [i num-missing]
-                                                (write-fn payload (get-default-value type-key mavlink-version)))))
-                                          (fn [payload message]
-                                            (write-fn payload (name-key message))))
-                                       (report-error {:cause :no-write-fn}
-                                                     (str "No function to write " type-key))))
-                                   sorted-fields)
-
-                      decode-fns 
-                        (mapv #(let [{:keys [name-key type-key length enum-type]} %
-                                     read-fn (type-key read-payload)
-                                     enum-group (get enums-by-group enum-type) ]
-                                 (if-not read-fn
-                                   (report-error {:cause :no-read-fn}
-                                                 "Unknown type" type-key
-                                                 "for field" name-key
-                                                 "in message" msg-name)
-                                   (if length
-                                     (fn [buffer]
-                                       (let [new-array (reduce
-                                                         (fn [vr i] (conj vr (let [v (read-fn buffer)]
-                                                                               (if enum-type
-                                                                                 (lookup-enum enum-group v)
-                                                                                 v))))
-                                                         []
-                                                         (range length))]
-                                         { name-key (if (= type-key :char)
-                                                      (.trim (new String ^"[B" (into-array Byte/TYPE new-array)))
-                                                      new-array) }))
-                                     (fn [buffer]
-                                       { name-key (let [v (read-fn buffer)]
-                                                    (if enum-type
-                                                      (lookup-enum enum-group v)
-                                                      v)) } ))))
-                              sorted-fields)]
+                                              { name-key (get-default-value type-key MAVLINK-VERSION) }))
+                                         fields))
+                      encode-fns (mapv gen-encode-fn fields)
+                      decode-fns (mapv #(gen-decode-fn % enums-by-group) fields)
+                      encode-fns-ext (mapv gen-encode-fn ext-fields)
+                      decode-fns-ext (mapv #(gen-decode-fn % enums-by-group) ext-fields)
+                      ]
                   { (keywordize msg-name)
                     {:msg-id msg-id
                      :default-msg default-msg
                      :last-value (ref default-msg)
                      :msg-key (keywordize msg-name)
                      :payload-size payload-size
-                     :fields sorted-fields
+                     :fields fields
+                     :extension-fields ext-fields
                      :encode-fns encode-fns
                      :decode-fns decode-fns
-                     :magic-byte msg-magic-byte
-                     :extension-fields (sort-fields ext-fields)
+                     :crc-seed crc-seed
                     }
                   }))))
        all-descriptions
@@ -263,25 +278,25 @@
    new-part new-file]
   (let [conflicts (filterv #(% enum-to-value) (keys (:enum-to-value new-part)))]
     (when-not (empty? conflicts)
-      (report-error {:cause :enum-conflicts}
-                    "Adding" new-file
-                    "there are conflicts with the following enums"
-                    conflicts
-                    "The new values will override the existing values.")))
+      (throw (ex-info (str "Adding " new-file
+                           " there are conflicts with the following enums"
+                           conflicts
+                           ". The new values will override the existing values.")
+                      {:cause :enum-conflicts}))))
   (let [conflicts (filterv #(get messages-by-id %) (keys (:messages-by-id new-part)))]
     (when-not (empty? conflicts)
-      (report-error {:cause :message-id-conflicts}
-                    "Adding" new-file
-                    "there are conflicts with the following message ids:"
-                    conflicts
-                    "The new values will override the existing values.")))
+      (throw (ex-info (str "Adding " new-file
+                           " there are conflicts with the following message ids:"
+                           conflicts
+                           ". The new values will override the existing values.")
+                      {:cause :message-id-conflicts}))))
   (let [conflicts (filterv #(% messages-by-keyword) (keys (:messages-by-keyword new-part)))]
     (when-not (empty? conflicts)
-      (report-error {:cause :message-name-conflicts}
-                    "Adding" new-file
-                    "there are conflicts with the following message names:"
-                    conflicts
-                    "The new values will override the existing values.")))
+      (throw (ex-info (str "Adding " new-file
+                           " there are conflicts with the following message names:"
+                           conflicts
+                           ". The new values will override the existing values.")
+                      {:cause :message-name-conflicts}))))
   {:descriptions (merge descriptions (:descriptions new-part))
    :enum-to-value (merge enum-to-value (:enum-to-value new-part))
    :enums-by-group (merge enums-by-group (:enums-by-group new-part))
@@ -298,16 +313,17 @@
               (doseq [file includes]
                 (let [included (some #(= file (:xml-file %)) xml-sources)]
                   (when-not included
-                    (report-error {:cause :missing-xml-include}
-                                  file "is included but not listed in :xml-sources" xml-sources))))))]
+                    (throw (ex-info (str  file " is included but not listed in :xml-sources: "
+                                          xml-sources)
+                                     {:cause :missing-xml-include})))))))]
     (let [sources-with-zippers
             (mapv #(let [{:keys [xml-file xml-source]} %
                          zipper (-> (:xml-source %) xml/parse zip/xml-zip)
                          file-name (or (zip-xml/xml1-> zipper :mavlink (zip-xml/attr :file))
                                        xml-file)]
                      (when-not file-name
-                       (report-error {:cause :missing-xml-file-id}
-                                     "no file= attribute in XML and no :xml-file in" xml-source))
+                       (throw (ex-info (str "no file= attribute in XML and no :xml-file in " xml-source)
+                                       {:cause :missing-xml-file-id})))
                      (assoc % :xml-zipper zipper
                               :xml-file file-name))
                   xml-sources)]
