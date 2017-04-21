@@ -88,7 +88,8 @@
    :last-values (apply merge (map #(let [{:keys [msg-key default-msg]} %]
                                      {msg-key (ref default-msg)})
                                   (vals (:messages-by-keyword mavlink))))
-   :decode-sm (atom {:state start-state})
+   :decode-sm (atom start-state)
+   :decode-message-id (atom 0)
    :statistics (atom {:bytes-received 0
                       :messages-decoded 0
                       :messages-encoded 0
@@ -224,7 +225,7 @@
     (while (zero? (.get payload (dec (.position payload))))
       (.position payload (dec (.position payload))))
     (let [trimmed-payload-size (.position payload)]
-      (.aset-byte packed (.byteValue (new Long trimmed-payload-size)))
+      (aset-byte packed (byte-to-long (.byteValue (new Long trimmed-payload-size))))
 
       ; now copy the array from the payload to the packed array.
       (java.lang.System/arraycopy (.array payload) 0 packed 6 (.position payload))
@@ -284,43 +285,53 @@
    then decode the message and return it. Use the state map to hold the return message,
    simply dissoc the fields that are not used. In case of error, update the statistics
    and restart the decode state machine."
-  [{:keys [decode-sm ^ByteBuffer input-buffer mavlink statistics] :as channel} a-byte]
+  [{:keys [decode-sm decode-message-id 
+           ^ByteBuffer input-buffer mavlink statistics] :as channel} a-byte]
   (let [{:keys [messages-by-id]} mavlink
-                               {:keys [checksum-lsb message-id protocol hdr-payload-size]} @decode-sm
-        {:keys [crc-seed payload-size msg-key decode-fns]} (get messages-by-id message-id)
+        {:keys [crc-seed payload-size msg-key decode-fns]} (get messages-by-id @decode-message-id)
+        last-idx (dec (.position input-buffer))
+        checksum-lsb (byte-to-long (.get input-buffer (int last-idx)))
         checksum (bit-or (bit-and checksum-lsb 0xff)
                          (bit-and (bit-shift-left (byte-to-long a-byte) 8) 0xff00))
-        checksum-calc (compute-checksum input-buffer 0 (.position input-buffer) crc-seed)]
+        checksum-calc (compute-checksum input-buffer 1 last-idx crc-seed)]
     (if (== checksum checksum-calc)
-      (let [payload-start  (if (= protocol :mavlink1)
-                             (dec MAVLINK1-HDR-SIZE)
-                             (dec MAVLINK2-HDR-SIZE))]
+      (let [decode-payload-size (byte-to-long (.get input-buffer 1))
+            payload-start  (if (= (.get input-buffer 0) MAVLINK1-START-BYTE)
+                             MAVLINK1-HDR-SIZE
+                             MAVLINK2-HDR-SIZE)]
         (.position input-buffer payload-start)
-        (when (and (= protocol :mavlink2)
-                   (> payload-size hdr-payload-size))
-          (doseq [i (range (- payload-size hdr-payload-size))]
+        (when (and (= (.get input-buffer 0) MAVLINK2-START-BYTE)
+                   (> payload-size decode-payload-size))
+          (println "FIlling in a trimmed message.")
+          (doseq [i (range (- payload-size decode-payload-size))]
             (.put input-buffer (byte 0))))
         ; decode the message, restart the decode state machine, then
         ; save the message and return it!
         (let [message (apply merge
                              {:message-id msg-key
-                              :sequence-id (:sequence-id @decode-sm)
-                              :system-id (:system-id @decode-sm)
-                              :component-id (:component-id @decode-sm)}
+                              :sequence-id (if (= (.get input-buffer 0) MAVLINK1-START-BYTE)
+                                             (byte-to-long (new Long (.get input-buffer 2)))
+                                             (byte-to-long (new Long (.get input-buffer 4))))
+                              :system-id (if (= (.get input-buffer 0) MAVLINK1-START-BYTE)
+                                             (byte-to-long (new Long (.get input-buffer 3)))
+                                             (byte-to-long (new Long (.get input-buffer 5))))
+                              :component-id (if (= (.get input-buffer 0) MAVLINK1-START-BYTE)
+                                             (byte-to-long (new Long (.get input-buffer 4)))
+                                             (byte-to-long (new Long (.get input-buffer 6))))}
                              (map #(% input-buffer) decode-fns))]
           (swap! statistics assoc :messages-decoded (inc (:messages-decoded @statistics)))
-          (reset! decode-sm {:state start-state})
+          (reset! decode-sm start-state)
           message))
       (do
         (swap! statistics assoc :bad-checksums (inc (:bad-checksums @statistics)))
-        (reset! decode-sm {:state start-state})
+        (reset! decode-sm start-state)
         nil))))
 
 (defn checksum-lsb-state
   "Save the byte in the checksum-lsb, then go to checkbyte-msb-state."
-  [{:keys [decode-sm] :as channel} a-byte]
-  (swap! decode-sm assoc :state checksum-msb-state
-                     :checksum-lsb (byte-to-long a-byte))
+  [{:keys [decode-sm ^ByteBuffer input-buffer] :as channel} a-byte]
+  (.put input-buffer ^byte a-byte)
+  (reset! decode-sm checksum-msb-state)
   nil)
 
 (defn payload-state
@@ -328,69 +339,71 @@
    then go to checkbyte-lsb-state."
   [{:keys [decode-sm ^ByteBuffer input-buffer] :as channel} a-byte]
   (.put input-buffer ^byte a-byte)
-  (when (>= (.position input-buffer) (:last-position @decode-sm))
-    (swap! decode-sm assoc :state checksum-lsb-state))
+  (let [decode-payload-size (byte-to-long (.get input-buffer 1))]
+    (when (>= (.position input-buffer) (if (= (.get input-buffer 0) MAVLINK1-START-BYTE)
+                                         (+ MAVLINK1-HDR-SIZE decode-payload-size)
+                                         (+ MAVLINK2-HDR-SIZE decode-payload-size)))
+      (reset! decode-sm checksum-lsb-state)))
   nil)
 
 (defn msg-id-byte3-state
   "Add the byte to the message id, then verify the message, like message-id state
    handling MAVlink 1 protocol."
-  [{:keys [decode-sm ^ByteBuffer input-buffer mavlink] :as channel} a-byte]
+  [{:keys [decode-sm decode-message-id ^ByteBuffer input-buffer mavlink] :as channel} a-byte]
   (.put input-buffer ^byte a-byte)
-  (let [{:keys [messages-by-id]} mavlink
-                message-id (+ (bit-and (bit-shift-left (byte-to-long a-byte) 16) 0xff0000)
-                      (:message-id @decode-sm))
-        {:keys [hdr-payload-size]} @decode-sm]
-    (swap! decode-sm assoc :message-id message-id
-                       :last-position (+ hdr-payload-size (dec MAVLINK2-HDR-SIZE)))
-    (if (verify-payload hdr-payload-size (get messages-by-id message-id))
-      (swap! decode-sm assoc :state payload-state)
-      (reset! decode-sm {:state start-state})))
+  (let [low-idx (- (.position input-buffer) 3)
+        low-byte (byte-to-long (.get input-buffer low-idx))
+        middle-byte (byte-to-long (.get input-buffer (inc low-idx)))
+        high-byte (byte-to-long (.get input-buffer (+ low-idx 2)))
+        {:keys [messages-by-id]} mavlink
+        message-id (+ (bit-and (bit-shift-left high-byte 16) 0xff0000)
+                      (bit-and (bit-shift-left middle-byte 8) 0xff00)
+                      (bit-and low-byte 0xff))]
+    (if (verify-payload (byte-to-long (.get input-buffer 1))
+                        (get messages-by-id message-id))
+      (do
+        (reset! decode-sm payload-state)
+        (reset! decode-message-id message-id))
+      (reset! decode-sm start-state)))
   nil)
 
 (defn msg-id-byte2-state
   "Add the byte to the message id, then go to message id byte 3 state."
   [{:keys [decode-sm ^ByteBuffer input-buffer] :as channel} a-byte]
   (.put input-buffer ^byte a-byte)
-  (swap! decode-sm assoc :state msg-id-byte3-state
-                            :message-id (+ (bit-and (bit-shift-left (byte-to-long a-byte) 8) 0xff00)
-                                           (:message-id @decode-sm)))
+  (reset! decode-sm msg-id-byte3-state)
   nil)
 
 (defn msg-id-state
   "Verify that the message id is valid and the payload size is less than the payload
    of the message spec for the message id. If it isn't go back to the start state
    Then go to the message id state."
-  [{:keys [decode-sm ^ByteBuffer input-buffer mavlink] :as channel} a-byte]
+  [{:keys [decode-sm decode-message-id  ^ByteBuffer input-buffer mavlink] :as channel} a-byte]
   (.put input-buffer ^byte a-byte)
   (let [{:keys [messages-by-id]} mavlink
-        {:keys [protocol hdr-payload-size]} @decode-sm
         message-id (byte-to-long a-byte)]
-    (swap! decode-sm assoc :message-id message-id)
-    (if (= protocol :mavlink1)
-      (if (verify-payload hdr-payload-size (get messages-by-id message-id))
-        (swap! decode-sm assoc :state payload-state
-                           :last-position (+ hdr-payload-size (dec MAVLINK1-HDR-SIZE)))
-        (reset! decode-sm {:state start-state}))
-      (if (= protocol :mavlink2)
-        (swap! decode-sm assoc :state msg-id-byte2-state)
-        (reset! decode-sm {:state start-state}))))
+    (if (= (.get input-buffer 0) MAVLINK1-START-BYTE)
+      (if (verify-payload (byte-to-long (.get input-buffer 1))
+                          (get messages-by-id message-id))
+        (do
+          (reset! decode-sm payload-state)
+          (reset! decode-message-id message-id))
+        (reset! decode-sm start-state))
+      (reset! decode-sm msg-id-byte2-state)))
   nil)
 
 (defn compat-flags-state
   "Save the byte in the compat-flags, then go to sequence id state."
   [{:keys [decode-sm ^ByteBuffer input-buffer] :as channel} a-byte]
   (.put input-buffer ^byte a-byte)
-  (swap! decode-sm assoc :state msg-id-state
-                     :compat-flags (byte-to-long a-byte))
+  (reset! decode-sm msg-id-state)
   nil)
 
 (defn incompat-flags-state
   "Save the byte in the incompat-flags, then go to compat-flags-state."
   [{:keys [decode-sm ^ByteBuffer input-buffer] :as channel} a-byte]
   (.put input-buffer ^byte a-byte)
-  (swap! decode-sm assoc :state compat-flags-state
-                     :incompat-flags (byte-to-long a-byte))
+  (reset! decode-sm compat-flags-state)
   nil)
 
 (defn compid-state
@@ -398,8 +411,7 @@
    Then go to the message id state."
   [{:keys [decode-sm ^ByteBuffer input-buffer] :as channel} a-byte]
   (.put input-buffer ^byte a-byte)
-  (swap! decode-sm assoc :state msg-id-state
-                     :component-id (byte-to-long a-byte))
+  (reset! decode-sm msg-id-state)
   nil)
 
 (defn sysid-state
@@ -407,8 +419,7 @@
    Then go to the component id state."
   [{:keys [decode-sm ^ByteBuffer input-buffer] :as channel} a-byte]
   (.put input-buffer ^byte a-byte)
-  (swap! decode-sm assoc :state compid-state
-                     :system-id (byte-to-long a-byte))
+  (reset! decode-sm compid-state)
   nil)
 
 (defn seq-id-state
@@ -416,8 +427,7 @@
    then go to the system id state."
   [{:keys [decode-sm ^ByteBuffer input-buffer] :as channel} a-byte]
   (.put input-buffer ^byte a-byte)
-  (swap! decode-sm assoc :state sysid-state
-                     :sequence-id (byte-to-long a-byte))
+  (reset! decode-sm sysid-state)
   nil)
 
 (defn payload-size-state
@@ -425,10 +435,9 @@
    to the appropriate next state depending on the protocol."
   [{:keys [decode-sm ^ByteBuffer input-buffer] :as channel} a-byte]
   (.put input-buffer ^byte a-byte)
-  (swap! decode-sm assoc :state (if (= (:protocol @decode-sm) :mavlink1)
+  (reset! decode-sm (if (= (.get input-buffer 0) MAVLINK1-START-BYTE)
                               seq-id-state
-                              incompat-flags-state)
-                     :hdr-payload-size (byte-to-long a-byte))
+                              incompat-flags-state))
   nil)
 
 (defn start-state
@@ -436,14 +445,13 @@
    Ignore every other byte. Go to Payload size state when a start byte is seen;
    don't save the byte regardless. When a start byte is seen, completely reset
    the state."
-  [{:keys [decode-sm ^ByteBuffer input-buffer] :as channel} a-byte]
+  [{:keys [decode-sm decode-message-id ^ByteBuffer input-buffer] :as channel} a-byte]
   (when (or (= a-byte MAVLINK1-START-BYTE)
             (= a-byte MAVLINK2-START-BYTE))
-    (reset! decode-sm {:state payload-size-state
-                   :protocol (if (= a-byte MAVLINK1-START-BYTE)
-                               :mavlink1
-                               :mavlink2)})
+    (reset! decode-sm payload-size-state)
+    (reset! decode-message-id nil)
     (.clear input-buffer)
+    (.put input-buffer ^byte a-byte)
     nil))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -458,10 +466,9 @@
    Both MAVlink 1.0 and MAVlink 2.0 are supported."
   [{:keys [statistics decode-sm last-values] :as channel} a-byte]
   {:pre [(instance? Byte a-byte)
-         (map? @decode-sm)
-         (fn? (:state @decode-sm))]}
+         (fn? @decode-sm)]}
   (swap! statistics assoc :bytes-received (inc (:bytes-received @statistics)))
-  (when-let [message ((:state @decode-sm) channel a-byte)]
+  (when-let [message (@decode-sm channel a-byte)]
     (when-let [message-key (:message-id message)]
       (when-let [msg-ref (message-key last-values)]
         (dosync (ref-set msg-ref message))))
