@@ -6,14 +6,11 @@
   :dependencies [[org.clojure/clojure "1.8.0"]
                  [org.clojure/data.xml "0.0.8"]
                  [org.clojure/data.zip "0.1.2"]
-                 [criterium "0.4.4"]
                  ]
-  :profile {:dev {:dependencies [ [criterium "0.4.4"] ]
-                  :java-source-paths ["test/mavlink"]
-                  }
-            :benchmark
-                 {:dependencies [ [criterium "0.4.4"] ]
-                  :java-source-paths ["src/java"]
+  :profiles {:dev {:dependencies [ [criterium "0.4.4"] ]
+                  :java-source-paths ["test/mavlink"
+                                      "src/java"
+                                      ]
                   }
             }
   :global-vars {*warn-on-reflection* true})

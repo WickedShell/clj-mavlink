@@ -7,6 +7,7 @@
 (def ^:const MAVLINK1-START-VALUE 254)
 (defonce MAVLINK1-START-BYTE (.byteValue (new Long MAVLINK1-START-VALUE)))
 (def ^:const MAVLINK1-HDR-SIZE 6)
+(def ^:const MAVLINK1-HDR-CRC-SIZE 8)   ; HDR-SIZE plus the checksum bytes
 
 (def ^:const MAVLINK2-START-VALUE 253)
 (defonce MAVLINK2-START-BYTE (.byteValue (new Long MAVLINK2-START-VALUE)))
@@ -271,14 +272,6 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (declare start-state)
-(defn verify-payload
-  "Verifies that the payload size is less than the payload specified for the message.
-   If the message-info is nil, then nil is returned, otherwise true or false is
-   returned if the payload size is valid or invalid."
-  [hdr-payload-size message-info]
-  (when-let [{:keys [payload-size]} message-info]
-    (>= payload-size hdr-payload-size)))
-
 
 (defn checksum-msb-state
   "This byte the msb of the checksum. Verify the checksum, if it verifies,
@@ -351,16 +344,17 @@
    handling MAVlink 1 protocol."
   [{:keys [decode-sm decode-message-id ^ByteBuffer input-buffer mavlink] :as channel} a-byte]
   (.put input-buffer ^byte a-byte)
-  (let [low-idx (- (.position input-buffer) 3)
-        low-byte (byte-to-long (.get input-buffer low-idx))
-        middle-byte (byte-to-long (.get input-buffer (inc low-idx)))
-        high-byte (byte-to-long (.get input-buffer (+ low-idx 2)))
+  (let [low-byte (byte-to-long (.get input-buffer 7))
+        middle-byte (byte-to-long (.get input-buffer 8))
+        high-byte (byte-to-long (.get input-buffer 9))
         {:keys [messages-by-id]} mavlink
         message-id (+ (bit-and (bit-shift-left high-byte 16) 0xff0000)
                       (bit-and (bit-shift-left middle-byte 8) 0xff00)
-                      (bit-and low-byte 0xff))]
-    (if (verify-payload (byte-to-long (.get input-buffer 1))
-                        (get messages-by-id message-id))
+                      (bit-and low-byte 0xff))
+        message-map (get messages-by-id message-id)]
+    (if (and message-map
+             (<= (byte-to-long (.get input-buffer 1))
+                 (:payload-size message-map)))
       (do
         (reset! decode-sm payload-state)
         (reset! decode-message-id message-id))
@@ -383,12 +377,14 @@
   (let [{:keys [messages-by-id]} mavlink
         message-id (byte-to-long a-byte)]
     (if (= (.get input-buffer 0) MAVLINK1-START-BYTE)
-      (if (verify-payload (byte-to-long (.get input-buffer 1))
-                          (get messages-by-id message-id))
-        (do
-          (reset! decode-sm payload-state)
-          (reset! decode-message-id message-id))
-        (reset! decode-sm start-state))
+      (let [message-map (get messages-by-id message-id)]
+        (if (and message-map
+                 (<= (byte-to-long (.get input-buffer 1))
+                     (:payload-size message-map)))
+          (do
+            (reset! decode-sm payload-state)
+            (reset! decode-message-id message-id))
+          (reset! decode-sm start-state)))
       (reset! decode-sm msg-id-byte2-state)))
   nil)
 
@@ -469,64 +465,116 @@
          (fn? @decode-sm)]}
   (swap! statistics assoc :bytes-received (inc (:bytes-received @statistics)))
   (when-let [message (@decode-sm channel a-byte)]
-    (when-let [message-key (:message-id message)]
-      (when-let [msg-ref (message-key last-values)]
-        (dosync (ref-set msg-ref message))))
     message))
 
-(defn decode-byte-old
+(defn decode-byte-mavlink
   "Add a byte to the mavlink input buffer, and if we have a message check the
    checksum. If the checksum matches decode the message, clear the buffer and
    return the message.  If the checksum mis-matches, clear the buffer and
-   report the error."
-  [{:keys [messages-by-id ^ByteBuffer input-buffer] :as mavlink} a-byte]
+   record the error in the statistics.
+   The MAVLink 1 message consists of the following 6 bytes:
+     Byte 0 MAVLINK1-START-BYTE
+     Byte 1 Payload size
+     Byte 2 Sequence id
+     Byte 3 System id
+     Byte 4 Component id
+     Byte 5 Message id"
+  [{:keys [mavlink ^ByteBuffer input-buffer statistics] :as channel} a-byte]
   {:pre [input-buffer
-         messages-by-id
+         (:messages-by-id mavlink)
          (instance? Byte a-byte)]}
+  (swap! statistics assoc :bytes-received (inc (:bytes-received @statistics)))
   (if (zero? (.position input-buffer))
-    (when (= a-byte MAVLINK1-START-BYTE)
+    (when (or (= a-byte MAVLINK1-START-BYTE)
+              (= a-byte MAVLINK2-START-BYTE))
       (.put input-buffer ^byte a-byte)
       nil)
+  ; else if this is MAVLink 1
+  (if (== (.get input-buffer 0) MAVLINK1-START-BYTE)
     (do
       (.put input-buffer ^byte a-byte)
-      ; when have at minimum the header and checksum, continue
-      (when (>= (.position input-buffer) 8)
-        (let [payload-size (byte-to-long (.get input-buffer 1))
+      (if (== (.position input-buffer) MAVLINK1-HDR-SIZE)
+        (let [{:keys [messages-by-id]} mavlink
+              payload-size (byte-to-long (.get input-buffer 1))
               msg-id (byte-to-long (.get input-buffer 5))
               message-map (get messages-by-id msg-id)]
-          (if (or (nil? message-map)
+          (when (or (nil? message-map)
                   (> payload-size (:payload-size message-map)))
-            (do
-              (.clear input-buffer)
-              nil)
-            ; when I have the header, payload and checksum, continue
-            (when (>= (.position input-buffer) (+ 8 payload-size))
-              (let [{:keys [decode-fns msg-key last-value crc-seed]} message-map
-                    checksum (let [lsb (.get input-buffer ^int (+ 6 payload-size))
-                                   msb (.get input-buffer ^int (+ 7 payload-size))]
-                               (bit-or (bit-and lsb 0xff)
-                                       (bit-and (bit-shift-left msb 8) 0xff00)))
-                    checksum2 (compute-checksum input-buffer 1 (+ 6 payload-size) crc-seed)
-                    ]
-                (.position input-buffer 6)
-                (if (== checksum checksum2)
-                  (let [message (apply merge {:message-id msg-key
-                                              :sequence-id (byte-to-long (.get input-buffer 2))
-                                              :system-id (byte-to-long (.get input-buffer 3))
-                                              :component-id (byte-to-long (.get input-buffer 4))}
-                                             (map #(% input-buffer) decode-fns))]
-                    (.clear input-buffer)
-                    (dosync
-                      (ref-set last-value message)))
-                  (do
-                    (.clear input-buffer)
-                    (throw (ex-info "Checksum mismatch"
-                                    {:cause :bad-checksum
-                                     :message-checksum checksum
-                                     :calculated-checksum checksum2
-                                     :message-id msg-id
-                                     :payload-size payload-size
-                                     :message-key msg-key}))))))))))))
+            (.clear input-buffer))
+          nil)
+        (let [payload-size (byte-to-long (.get input-buffer 1))]
+          ; when I have the header, payload and checksum, continue
+          (when (>= (.position input-buffer) (+ MAVLINK1-HDR-CRC-SIZE payload-size))
+            (let [{:keys [messages-by-id]} mavlink
+                  msg-id (byte-to-long (.get input-buffer 5))
+                  message-map (get messages-by-id msg-id)
+                  {:keys [decode-fns msg-key last-value crc-seed]} message-map
+                  checksum (let [lsb (.get input-buffer ^int (+ 6 payload-size))
+                                 msb (.get input-buffer ^int (+ 7 payload-size))]
+                             (bit-or (bit-and lsb 0xff)
+                                     (bit-and (bit-shift-left msb 8) 0xff00)))
+                  checksum-calc (compute-checksum input-buffer 1 (+ MAVLINK1-HDR-SIZE payload-size) crc-seed)
+                  ]
+              (.position input-buffer MAVLINK1-HDR-SIZE)
+              (if (== checksum checksum-calc)
+                (let [message (apply merge {:message-id msg-key
+                                            :sequence-id (byte-to-long (.get input-buffer 2))
+                                            :system-id (byte-to-long (.get input-buffer 3))
+                                            :component-id (byte-to-long (.get input-buffer 4))}
+                                           (map #(% input-buffer) decode-fns))]
+                  (.clear input-buffer)
+                  (swap! statistics assoc :messages-decoded (inc (:messages-decoded @statistics)))
+                  message)
+                (do
+                  (.clear input-buffer)
+                  (swap! statistics #(assoc % :bad-checksums (inc (:bad-checksums %))))
+                  nil)))))))
+  ; else if this is MAVLink 2
+  (if (== (.get input-buffer 0) MAVLINK2-START-BYTE)
+    (do
+      (.put input-buffer ^byte a-byte)
+      (if (== (.position input-buffer) MAVLINK2-HDR-SIZE)
+        (let [low-byte (byte-to-long (.get input-buffer 7))
+              middle-byte (byte-to-long (.get input-buffer 8))
+              high-byte (byte-to-long (.get input-buffer 9))
+              {:keys [messages-by-id]} mavlink
+              msg-id (+ (bit-and (bit-shift-left high-byte 16) 0xff0000)
+                        (bit-and (bit-shift-left middle-byte 8) 0xff00)
+                        (bit-and low-byte 0xff))
+              payload-size (byte-to-long (.get input-buffer 1))
+              message-map (get messages-by-id msg-id)]
+          (when (or (nil? message-map)
+                    (> payload-size (:payload-size message-map)))
+            (.clear input-buffer))
+          nil)
+        (let [payload-size (byte-to-long (.get input-buffer 1))]
+          ; when I have the header, payload and checksum, continue
+          (when (>= (.position input-buffer) (+ MAVLINK1-HDR-CRC-SIZE payload-size))
+            (let [{:keys [messages-by-id]} mavlink
+                  msg-id (byte-to-long (.get input-buffer 5))
+                  message-map (get messages-by-id msg-id)
+                  {:keys [decode-fns msg-key last-value crc-seed]} message-map
+                  checksum (let [lsb (.get input-buffer ^int (+ 6 payload-size))
+                                 msb (.get input-buffer ^int (+ 7 payload-size))]
+                             (bit-or (bit-and lsb 0xff)
+                                     (bit-and (bit-shift-left msb 8) 0xff00)))
+                  checksum-calc (compute-checksum input-buffer 1 (+ MAVLINK1-HDR-SIZE payload-size) crc-seed)
+                  ]
+              (.position input-buffer MAVLINK1-HDR-SIZE)
+              (if (== checksum checksum-calc)
+                (let [message (apply merge {:message-id msg-key
+                                            :sequence-id (byte-to-long (.get input-buffer 2))
+                                            :system-id (byte-to-long (.get input-buffer 3))
+                                            :component-id (byte-to-long (.get input-buffer 4))}
+                                           (map #(% input-buffer) decode-fns))]
+                  (.clear input-buffer)
+                  (swap! statistics assoc :messages-decoded (inc (:messages-decoded @statistics)))
+                  message)
+                (do
+                  (.clear input-buffer)
+                  (swap! statistics #(assoc % :bad-checksums (inc (:bad-checksums %))))
+                  nil)))))))
+      (.clear input-buffer)))))
 
 (defn decode-bytes
   "Decodes a MAVLink message from a byte array.
