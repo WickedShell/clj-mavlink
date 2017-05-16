@@ -70,7 +70,15 @@
                                   ]
                      :descriptions true}))
 
-(def channel (open-channel mavlink {:protocol :mavlink1} 99 88))
+(def channel (open-channel mavlink :mavlink1 99 88))
+
+(def mavlink-2 (parse {:xml-sources [{:xml-file "ardupilotmega.xml"
+                                      :xml-source (-> "test/resources/ardupilotmega.xml" io/input-stream)}
+                                     {:xml-file "common.xml"
+                                      :xml-source (-> "test/resources/common.xml" io/input-stream)}
+                                     {:xml-file "uAvionix.xml"
+                                      :xml-source (-> "test/resources/uAvionix.xml" io/input-stream)}]}))
+(def channel-2 (open-channel mavlink-2 :mavlink2 99 88))
 
 (defn get-test-message 
   "Given a message's specification map, generate a test message-map for it."
@@ -184,7 +192,7 @@
                         {:xml-sources [{:xml-file "test-parse.xml"
                                         :xml-source (-> "test/resources/test-parse.xml" io/input-stream)}]
                          :descriptions true})
-          channel-simple (open-channel mavlink-simple {:protocol :mavlink1} 99 88)]
+          channel-simple (open-channel mavlink-simple :mavlink1 99 88)]
       ;(pprint channel-simple)
       (is (thrown-with-msg? Exception #"conflicts" 
                   (parse
@@ -238,30 +246,30 @@
                                        {:xml-file "uAvionix.xml"
                                         :xml-source (-> "test/resources/uAvionix.xml" io/input-stream)}]
                          })
-          channel-complex (open-channel mavlink-complex {:protocol :mavlink1} 99 88)
+          channel-complex (open-channel mavlink-complex :mavlink1 99 88)
           simple-message (do
-                           (is (nil? (decode-byte-mavlink1 channel-complex (.byteValue (Long/valueOf "fe" 16)))))
-                           (is (nil? (decode-byte-mavlink1 channel-complex (byte 3))))
-                           (is (nil? (decode-byte-mavlink1 channel-complex (.byteValue (Long/valueOf "e3" 16)))))
-                           (is (nil? (decode-byte-mavlink1 channel-complex (byte 1))))
-                           (is (nil? (decode-byte-mavlink1 channel-complex (byte 1))))
-                           (is (nil? (decode-byte-mavlink1 channel-complex (.byteValue (Long/valueOf "a5" 16)))))
-                           (is (nil? (decode-byte-mavlink1 channel-complex (.byteValue (Long/valueOf "d0" 16)))))
-                           (is (nil? (decode-byte-mavlink1 channel-complex (byte 18))))
-                           (is (nil? (decode-byte-mavlink1 channel-complex (byte 0))))
-                           (is (nil? (decode-byte-mavlink1 channel-complex (.byteValue (Long/valueOf "3b" 16)))))
-                           (decode-byte-mavlink1 channel-complex (.byteValue (Long/valueOf "d2" 16))))
-                           ;(is (nil? (decode-byte channel-complex (.byteValue (Long/valueOf "fe" 16)))))
-                           ;(is (nil? (decode-byte channel-complex (byte 3))))
-                           ;(is (nil? (decode-byte channel-complex (.byteValue (Long/valueOf "e3" 16)))))
-                           ;(is (nil? (decode-byte channel-complex (byte 1))))
-                           ;(is (nil? (decode-byte channel-complex (byte 1))))
-                           ;(is (nil? (decode-byte channel-complex (.byteValue (Long/valueOf "a5" 16)))))
-                           ;(is (nil? (decode-byte channel-complex (.byteValue (Long/valueOf "d0" 16)))))
-                           ;(is (nil? (decode-byte channel-complex (byte 18))))
-                           ;(is (nil? (decode-byte channel-complex (byte 0))))
-                           ;(is (nil? (decode-byte channel-complex (.byteValue (Long/valueOf "3b" 16)))))
-                           ;(decode-byte channel-complex (.byteValue (Long/valueOf "d2" 16))))
+                           ;(is (nil? (decode-byte-mavlink1 channel-complex (.byteValue (Long/valueOf "fe" 16)))))
+                           ;(is (nil? (decode-byte-mavlink1 channel-complex (byte 3))))
+                           ;(is (nil? (decode-byte-mavlink1 channel-complex (.byteValue (Long/valueOf "e3" 16)))))
+                           ;(is (nil? (decode-byte-mavlink1 channel-complex (byte 1))))
+                           ;(is (nil? (decode-byte-mavlink1 channel-complex (byte 1))))
+                           ;(is (nil? (decode-byte-mavlink1 channel-complex (.byteValue (Long/valueOf "a5" 16)))))
+                           ;(is (nil? (decode-byte-mavlink1 channel-complex (.byteValue (Long/valueOf "d0" 16)))))
+                           ;(is (nil? (decode-byte-mavlink1 channel-complex (byte 18))))
+                           ;(is (nil? (decode-byte-mavlink1 channel-complex (byte 0))))
+                           ;(is (nil? (decode-byte-mavlink1 channel-complex (.byteValue (Long/valueOf "3b" 16)))))
+                           ;(decode-byte-mavlink1 channel-complex (.byteValue (Long/valueOf "d2" 16))))
+                           (is (nil? (decode-byte channel-complex (.byteValue (Long/valueOf "fe" 16)))))
+                           (is (nil? (decode-byte channel-complex (byte 3))))
+                           (is (nil? (decode-byte channel-complex (.byteValue (Long/valueOf "e3" 16)))))
+                           (is (nil? (decode-byte channel-complex (byte 1))))
+                           (is (nil? (decode-byte channel-complex (byte 1))))
+                           (is (nil? (decode-byte channel-complex (.byteValue (Long/valueOf "a5" 16)))))
+                           (is (nil? (decode-byte channel-complex (.byteValue (Long/valueOf "d0" 16)))))
+                           (is (nil? (decode-byte channel-complex (byte 18))))
+                           (is (nil? (decode-byte channel-complex (byte 0))))
+                           (is (nil? (decode-byte channel-complex (.byteValue (Long/valueOf "3b" 16)))))
+                           (decode-byte channel-complex (.byteValue (Long/valueOf "d2" 16))))
           decoded (first (decode-bytes channel-complex (encode channel-complex {:message-id :heartbeat :type :mav-type-helicopter
                                                           :autopilot :mav-autopilot-ardupilotmega
                                                           :base_mode :mav-mode-auto-armed
@@ -351,4 +359,212 @@
           "Decode of message in two parts failed.")
         )))
 
-
+(deftest mavlink2
+  (testing "Testing MAVLink 2.0 with extension but no signature; also testing auto sequence numbering"
+    (let [bs-empty (encode channel-2 {:message-id :meminfo })
+          bs-1 (encode channel-2 {:message-id :meminfo :brkval 44})
+          bs-2 (encode channel-2 {:message-id :meminfo :freemem 33})
+          bs-3 (encode channel-2 {:message-id :meminfo :freemem32 66})
+          bs-all (encode channel-2 {:message-id :meminfo :freemem32 66 :brkval 44 :freemem 33})]
+      (is (= [{:message-id :meminfo, :sequence-id 1, :system-id 99, :component-id 88, :link-id nil, :brkval 0, :freemem 0, :freemem32 0}]
+             (decode-bytes channel-2 bs-empty)))
+      (is (= [{:message-id :meminfo, :sequence-id 2, :system-id 99, :component-id 88, :link-id nil, :brkval 44, :freemem 0, :freemem32 0}]
+             (decode-bytes channel-2 bs-1)))
+      (is (= [{:message-id :meminfo, :sequence-id 3, :system-id 99, :component-id 88, :link-id nil, :brkval 0, :freemem 33, :freemem32 0}]
+             (decode-bytes channel-2 bs-2)))
+      (is (= [{:message-id :meminfo, :sequence-id 4, :system-id 99, :component-id 88, :link-id nil, :brkval 0, :freemem 0, :freemem32 66}]
+             (decode-bytes channel-2 bs-3)))
+      (is (= [{:message-id :meminfo, :sequence-id 5, :system-id 99, :component-id 88, :link-id nil, :brkval 44, :freemem 33, :freemem32 66}]
+             (decode-bytes channel-2 bs-all)))
+      ))
+  (testing "Testing MAVLink 2.0 with extension but no signature."
+    (let [bs-empty (encode channel-2 {:message-id :optical-flow :sequence-id 1 })
+          bs-1 (encode channel-2 {:message-id :optical-flow :time_usec 444444})
+          bs-2 (encode channel-2 {:message-id :optical-flow :flow_comp_m_x 3333.33})
+          bs-3 (encode channel-2 {:message-id :optical-flow :flow_rate_x 22.25})
+          bs-4 (encode channel-2 {:message-id :optical-flow :flow_rate_x 22.25 :flow_rate_y 55.25})
+          bs-5 (encode channel-2 {:message-id :optical-flow :time_usec 444444 :flow_rate_x 22.25 :flow_rate_y 55.25})
+          bs-6 (encode channel-2 {:message-id :optical-flow :time_usec 444444 :sensor_id 16 :flow_rate_x 22.25 :flow_rate_y 55.25})
+          bs-7 (encode channel-2 {:message-id :optical-flow :time_usec 444444 :flow_x 1234 :sensor_id 16 :flow_rate_x 22.25 :flow_rate_y 55.25})
+          bs-8 (encode channel-2 {:message-id :optical-flow :time_usec 444444 :flow_y 4321 :sensor_id 16 :flow_rate_x 22.25 :flow_rate_y 55.25})
+          bs-9 (encode channel-2 {:message-id :optical-flow :quality 55 :time_usec 444444 :flow_y 4321 :sensor_id 16 :flow_rate_x 22.25 :flow_rate_y 55.25})
+          bs-all (encode channel-2 {:message-id :optical-flow :ground_distance 123.456 :quality 55 :time_usec 444444 :flow_y 4321 :sensor_id 16 :flow_rate_x 22.25 :flow_rate_y 55.25})]
+      (is (= [{:message-id :optical-flow, :sequence-id 1, :system-id 99, :component-id 88, :link-id nil, :time_usec 0N :sensor_id 0 :flow_x 0 :flow_y 0 :flow_comp_m_x 0.0 :flow_comp_m_y 0.0 :quality 0 :ground_distance 0.0 :flow_rate_y 0.0 :flow_rate_x 0.0}]
+               (decode-bytes channel-2 bs-empty)))
+      (is (= [{:message-id :optical-flow, :sequence-id 2, :system-id 99, :component-id 88, :link-id nil, :time_usec 444444N :sensor_id 0 :flow_x 0 :flow_y 0 :flow_comp_m_x 0.0 :flow_comp_m_y 0.0 :quality 0 :ground_distance 0.0 :flow_rate_y 0.0 :flow_rate_x 0.0}]
+               (decode-bytes channel-2 bs-1)))
+      (is (Float/compare (float 3333.33) (:flow_comp_m_x (first (decode-bytes channel-2 bs-2)))))
+      (is (Float/compare (float 22.25) (:flow_rate_x (first (decode-bytes channel-2 bs-4)))))
+      (is (Float/compare (float 55.25) (:flow_rate_y (first (decode-bytes channel-2 bs-4)))))
+      (is (Float/compare (float 22.25) (:flow_rate_x (first (decode-bytes channel-2 bs-5)))))
+      (is (= 444444 (:time_usec (first (decode-bytes channel-2 bs-5)))))
+      (is (Float/compare (float 55.25) (:flow_rate_y (first (decode-bytes channel-2 bs-6)))))
+      (is (Float/compare (float 22.25) (:flow_rate_x (first (decode-bytes channel-2 bs-6)))))
+      (is (= 444444 (:time_usec (first (decode-bytes channel-2 bs-6)))))
+      (is (= 16 (:sensor_id (first (decode-bytes channel-2 bs-6)))))
+      (is (Float/compare (float 55.25) (:flow_rate_y (first (decode-bytes channel-2 bs-7)))))
+      (is (Float/compare (float 22.25) (:flow_rate_x (first (decode-bytes channel-2 bs-7)))))
+      (is (= 444444 (:time_usec (first (decode-bytes channel-2 bs-7)))))
+      (is (= 16 (:sensor_id (first (decode-bytes channel-2 bs-7)))))
+      (is (= 1234 (:flow_x (first (decode-bytes channel-2 bs-7)))))
+      (is (Float/compare (float 55.25) (:flow_rate_y (first (decode-bytes channel-2 bs-8)))))
+      (is (Float/compare (float 22.25) (:flow_rate_x (first (decode-bytes channel-2 bs-8)))))
+      (is (= 444444 (:time_usec (first (decode-bytes channel-2 bs-8)))))
+      (is (= 16 (:sensor_id (first (decode-bytes channel-2 bs-8)))))
+      (is (= 4321 (:flow_y (first (decode-bytes channel-2 bs-8)))))
+      (is (Float/compare (float 55.25) (:flow_rate_y (first (decode-bytes channel-2 bs-9)))))
+      (is (Float/compare (float 22.25) (:flow_rate_x (first (decode-bytes channel-2 bs-9)))))
+      (is (= 444444 (:time_usec (first (decode-bytes channel-2 bs-9)))))
+      (is (= 16 (:sensor_id (first (decode-bytes channel-2 bs-9)))))
+      (is (= 55 (:quality (first (decode-bytes channel-2 bs-9)))))
+      (is (= 4321 (:flow_y (first (decode-bytes channel-2 bs-9)))))
+      (is (Float/compare (float 55.25) (:flow_rate_y (first (decode-bytes channel-2 bs-all)))))
+      (is (Float/compare (float 22.25) (:flow_rate_x (first (decode-bytes channel-2 bs-all)))))
+      (is (Float/compare (float 123.456) (:ground_distance (first (decode-bytes channel-2 bs-all)))))
+      (is (= 444444 (:time_usec (first (decode-bytes channel-2 bs-all)))))
+      (is (= 16 (:sensor_id (first (decode-bytes channel-2 bs-all)))))
+      (is (= 55 (:quality (first (decode-bytes channel-2 bs-all)))))
+      (is (= 4321 (:flow_y (first (decode-bytes channel-2 bs-all)))))
+      (is (Float/compare (float 55.25) (:flow_rate_y (first (decode-bytes channel-2 bs-all)))))
+      ))
+  (testing "Testing MAVLink 2.0 signatures."
+    (let [secret-key (bytes (byte-array (map (comp byte int) "abcdefghijklmnopqrstuvwxyz123456")))]
+      (update-channel channel-2 :secret-key secret-key
+                                :link-id 15)
+      (let [bs-empty (encode channel-2 {:message-id :meminfo :sequence-id 1})
+            bs-1 (encode channel-2 {:message-id :meminfo :brkval 44})
+            bs-2 (encode channel-2 {:message-id :meminfo :freemem 33})
+            bs-3 (encode channel-2 {:message-id :meminfo :freemem32 66})
+            bs-all (encode channel-2 {:message-id :meminfo :freemem32 66 :brkval 44 :freemem 33})]
+        (is (= [{:message-id :meminfo, :sequence-id 1, :system-id 99, :component-id 88, :link-id 15, :brkval 0, :freemem 0, :freemem32 0}]
+               (decode-bytes channel-2 bs-empty)))
+        (is (= [{:message-id :meminfo, :sequence-id 2, :system-id 99, :component-id 88, :link-id 15, :brkval 44, :freemem 0, :freemem32 0}]
+               (decode-bytes channel-2 bs-1)))
+        (is (= [{:message-id :meminfo, :sequence-id 3, :system-id 99, :component-id 88, :link-id 15, :brkval 0, :freemem 33, :freemem32 0}]
+               (decode-bytes channel-2 bs-2)))
+        (is (= [{:message-id :meminfo, :sequence-id 4, :system-id 99, :component-id 88, :link-id 15, :brkval 0, :freemem 0, :freemem32 66}]
+               (decode-bytes channel-2 bs-3)))
+        (is (= [{:message-id :meminfo, :sequence-id 5, :system-id 99, :component-id 88, :link-id 15, :brkval 44, :freemem 33, :freemem32 66}]
+               (decode-bytes channel-2 bs-all)))
+      )))
+  (testing "Testing MAVLink 2.0 signatures, alternate open-channel interface."
+    (let [new-channel (open-channel mavlink-2 :mavlink2 99 88 15)
+          secret-key (bytes (byte-array (map (comp byte int) "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456")))]
+      (update-channel new-channel :secret-key secret-key)
+      (let [bs-empty (encode new-channel {:message-id :meminfo :sequence-id 1})
+            bs-1 (encode new-channel {:message-id :meminfo :brkval 44})
+            bs-2 (encode new-channel {:message-id :meminfo :freemem 33})
+            bs-3 (encode new-channel {:message-id :meminfo :freemem32 66})
+            bs-all (encode new-channel {:message-id :meminfo :freemem32 66 :brkval 44 :freemem 33})
+            servo-0 (encode new-channel {:message-id :servo-output-raw :link-id 22})
+            servo-1 (encode new-channel {:message-id :servo-output-raw :link-id 22 :servo1_raw 10})
+            servo-2 (encode new-channel {:message-id :servo-output-raw :link-id 22 :servo1_raw 10
+                                         :servo9_raw 20})
+            servo-3 (encode new-channel {:message-id :servo-output-raw :link-id 22 :servo1_raw 10
+                                         :servo9_raw 20 :servo16_raw 30})
+            servo-mangled (encode new-channel {:message-id :servo-output-raw :link-id 22 :servo1_raw 10
+                                         :servo9_raw 20 :servo16_raw 30})
+            ]
+        (is (= [{:message-id :meminfo, :sequence-id 1, :system-id 99, :component-id 88, :link-id 15, :brkval 0, :freemem 0, :freemem32 0}]
+               (decode-bytes new-channel bs-empty)))
+        (is (= [{:message-id :meminfo, :sequence-id 2, :system-id 99, :component-id 88, :link-id 15, :brkval 44, :freemem 0, :freemem32 0}]
+               (decode-bytes new-channel bs-1)))
+        (is (= [{:message-id :meminfo, :sequence-id 3, :system-id 99, :component-id 88, :link-id 15, :brkval 0, :freemem 33, :freemem32 0}]
+               (decode-bytes new-channel bs-2)))
+        (is (= [{:message-id :meminfo, :sequence-id 4, :system-id 99, :component-id 88, :link-id 15, :brkval 0, :freemem 0, :freemem32 66}]
+               (decode-bytes new-channel bs-3)))
+        (is (= [{:message-id :meminfo, :sequence-id 5, :system-id 99, :component-id 88, :link-id 15, :brkval 44, :freemem 33, :freemem32 66}]
+               (decode-bytes new-channel bs-all)))
+        (is (= [{:message-id :servo-output-raw, :sequence-id 6, :system-id 99, :component-id 88, :link-id 22,
+                 :time_usec 0N
+                 :port 0 
+                 :servo1_raw 0
+                 :servo2_raw 0
+                 :servo3_raw 0
+                 :servo4_raw 0
+                 :servo5_raw 0
+                 :servo6_raw 0
+                 :servo7_raw 0
+                 :servo8_raw 0
+                 :servo9_raw 0
+                 :servo10_raw 0
+                 :servo11_raw 0
+                 :servo12_raw 0
+                 :servo13_raw 0
+                 :servo14_raw 0
+                 :servo15_raw 0
+                 :servo16_raw 0
+                 }]
+               (decode-bytes new-channel servo-0)))
+        (is (= [{:message-id :servo-output-raw, :sequence-id 7, :system-id 99, :component-id 88, :link-id 22,
+                 :time_usec 0
+                 :port 0 
+                 :servo1_raw 10
+                 :servo2_raw 0
+                 :servo3_raw 0
+                 :servo4_raw 0
+                 :servo5_raw 0
+                 :servo6_raw 0
+                 :servo7_raw 0
+                 :servo8_raw 0
+                 :servo9_raw 0
+                 :servo10_raw 0
+                 :servo11_raw 0
+                 :servo12_raw 0
+                 :servo13_raw 0
+                 :servo14_raw 0
+                 :servo15_raw 0
+                 :servo16_raw 0
+                 }]
+               (decode-bytes new-channel servo-1)))
+        (is (= [{:message-id :servo-output-raw, :sequence-id 8, :system-id 99, :component-id 88, :link-id 22,
+                 :time_usec 0
+                 :port 0 
+                 :servo1_raw 10
+                 :servo2_raw 0
+                 :servo3_raw 0
+                 :servo4_raw 0
+                 :servo5_raw 0
+                 :servo6_raw 0
+                 :servo7_raw 0
+                 :servo8_raw 0
+                 :servo9_raw 20
+                 :servo10_raw 0
+                 :servo11_raw 0
+                 :servo12_raw 0
+                 :servo13_raw 0
+                 :servo14_raw 0
+                 :servo15_raw 0
+                 :servo16_raw 0
+                 }]
+               (decode-bytes new-channel servo-2)))
+        (is (thrown-with-msg? Exception #"timestamp error"
+               (decode-bytes new-channel servo-2)))
+        (aset-byte servo-mangled 60 (byte 1))
+        (is (thrown-with-msg? Exception #"sha256 error"
+               (decode-bytes new-channel servo-mangled)))
+        (is (thrown-with-msg? Exception #"timestamp error"
+               (decode-bytes new-channel servo-2)))
+        (is (= [{:message-id :servo-output-raw, :sequence-id 9, :system-id 99, :component-id 88, :link-id 22,
+                 :time_usec 0
+                 :port 0 
+                 :servo1_raw 10
+                 :servo2_raw 0
+                 :servo3_raw 0
+                 :servo4_raw 0
+                 :servo5_raw 0
+                 :servo6_raw 0
+                 :servo7_raw 0
+                 :servo8_raw 0
+                 :servo9_raw 20
+                 :servo10_raw 0
+                 :servo11_raw 0
+                 :servo12_raw 0
+                 :servo13_raw 0
+                 :servo14_raw 0
+                 :servo15_raw 0
+                 :servo16_raw 30
+                 }]
+               (decode-bytes new-channel servo-3)))
+      )))
+  )

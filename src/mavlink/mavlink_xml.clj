@@ -203,6 +203,9 @@
                       payload-size (apply + (map #(let [{:keys [type-key length]} %]
                                                     (* (type-key type-size) (or length 1)))
                                                  fields))
+                      payload-size-ext (apply + (map #(let [{:keys [type-key length]} %]
+                                                    (* (type-key type-size) (or length 1)))
+                                                 ext-fields))
                       crc-seed ; note that field names and their type names are used here
                         (let [msg-seed (str msg-name " "
                                             (apply str
@@ -223,11 +226,11 @@
                                             (if length
                                               { name-key (get-default-array type-key length) }
                                               { name-key (get-default-value type-key MAVLINK-VERSION) }))
-                                         fields))
+                                         (concat fields ext-fields)))
                       encode-fns (mapv gen-encode-fn fields)
                       decode-fns (mapv #(gen-decode-fn % enums-by-group) fields)
-                      encode-fns-ext (mapv gen-encode-fn ext-fields)
-                      decode-fns-ext (mapv #(gen-decode-fn % enums-by-group) ext-fields)
+                      ext-encode-fns (mapv gen-encode-fn ext-fields)
+                      ext-decode-fns (mapv #(gen-decode-fn % enums-by-group) ext-fields)
                       ]
                   { (keywordize msg-name)
                     {:msg-id msg-id
@@ -235,10 +238,13 @@
                      :last-value (ref default-msg)
                      :msg-key (keywordize msg-name)
                      :payload-size payload-size
+                     :extension-payload-size (+ payload-size payload-size-ext)
                      :fields fields
-                     :extension-fields ext-fields
                      :encode-fns encode-fns
                      :decode-fns decode-fns
+                     :extension-fields ext-fields
+                     :extension-encode-fns ext-encode-fns
+                     :extension-decode-fns ext-decode-fns
                      :crc-seed crc-seed
                     }
                   }))))
