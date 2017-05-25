@@ -7,9 +7,11 @@
            [java.lang System]))
 
 (use 'clojure.pprint)  ;; FIXME delete this sucker after testing
+(def print-encoded (atom false))
+(def print-decoded (atom true))
 
 (defonce IFLAG-SIGNED 0x01)
-(def sha256 ^MessageDigest (MessageDigest/getInstance "SHA-256"))
+(def sha256 (MessageDigest/getInstance "SHA-256"))
 
 (def ^:const MAVLINK1-START-VALUE 254)
 (defonce MAVLINK1-START-BYTE (.byteValue (new Long MAVLINK1-START-VALUE)))
@@ -82,39 +84,34 @@
                       mavlink-part
                       (add-mavlink mavlink mavlink-part (:xml-file source))))))))))
 
-(defn sync-timestamps
-  "Reinitialize the transmist and receive timestamps to the current time.
-   Note they will be set to the identical time."
-  [{:keys [rcv-timestamp tx-timestamp] :as channel} & args]
-  (reset! rcv-timestamp (reset! tx-timestamp (get-timestamp))))
-
 (defn update-channel
   "Update the MAVLink channel.
    Args is sequence of keyword value pairs (thus the count of args MUST be even)
    where the keyword is one of the following:
+
    :protocol :mavlink1 or :mavlink2 for encoding
    :secret-key a 32 byte array (the length MUST be 32) or nil to indicate don't sign
    :accept-unsigned-packets true or false
   "
-  [{:keys [protocol secret-key rcv-timestamp tx-timestamp
-           accept-unsigned-packets link-id] :as channel} & args]
+  [{:keys [protocol link-id secret-key accept-unsigned-packets] :as channel}
+   & args]
   {:pre [(even? (count args))]}
   (loop [k (first args)
          v (second args)
          rest-args (rest (rest args))]
     (condp = k
-      :link-id
-        (if (instance? Long v)
-          (reset! link-id (.byteValue (new Long ^long v)))
-          (throw (ex-info "Link id not a Long."
-                          {:cause :bad-link-id
-                           :value v})))
       :protocol
         (if (or (= v :mavlink1)
                 (= v :mavlink2))
           (reset! protocol v)
           (throw (ex-info "Bad protocol"
                           {:cause :bad-protocol
+                           :value v})))
+      :link-id
+        (if (instance? Long v)
+          (reset! link-id (.byteValue (new Long ^long v)))
+          (throw (ex-info "Bad Link id"
+                          {:cause :bad-link-id
                            :value v})))
       :secret-key
         (if (or (nil? v)
@@ -123,22 +120,10 @@
           (throw (ex-info "Bad secret key"
                           {:cause :bad-secret-key
                            :value v})))
-      :rcv-timestamp
-        (if (instance? Long v)
-          (reset! rcv-timestamp v)
-          (throw (ex-info "Timestamp not a Long."
-                          {:cause :bad-timestamp
-                           :value v})))
-      :tx-timestamp
-        (if (instance? Long v)
-          (reset! tx-timestamp v)
-          (throw (ex-info "Timestamp not a Long."
-                          {:cause :bad-timestamp
-                           :value v})))
       :accept-unsigned-packets
         (if (or (true? v)
                 (false? v))
-          (reset! accept-unsigned-packets)
+          (reset! accept-unsigned-packets v)
           (throw (ex-info "Bad accept-unsigned-packets"
                           {:cause :bad-accept-unsigned-packets
                            :value v})))
@@ -160,71 +145,71 @@
    protocol :mavlink1 or :mavlink2
    system-id system id for encoding
    component-id component id for encoding
-   link-id byte to use for link id for encoding
 
-   See update-channel to instantiate MAVLink2 specific.
+   See update-channel to update the channel.
 
-  Note the developer must setup signing and provide the link-id and secret-key
-  in the open-channel protocol map or update the protocol when they are ready to start signing.
+   To set-up signing, use update-channel to provide a secret-key.
 
-  The decode function will decode messages based on the type of message, which is determined
-  by the message start byte 0xfe for MAVLink 1.0 and 0xfd for MAVLink 2.0. If the incompat-flags
-  indicate signing, then signing will be verified (unless the :accept-unsigned-packets
-  is set, in which case unsigned packets are accepted, but signed packets must verify.
+   The decode function will decode messages based on the type of message, which is determined
+   by the message start byte 0xfe for MAVLink 1.0 and 0xfd for MAVLink 2.0.
+  
+   For MAVLink 2.0:
+     For decoding, if the incompat-flags indicate signing, then signing will be verified
+     (unless the :accept-unsigned-packets is set, in which case unsigned packets are accepted,
+     but signed packets must verify.
+     A system id, component id, and link id for each message decoded defines a signing
+     tuple. Each signing tuple has a timestamp associated with it. See verify-signing
+     for handling the decoded timestamps.
 
-  Timestamps just indicate forward progression (once a timestamp is seen, ignore
-  anything earlier). So, the initial values of both the tx and rcv timestamps are 0.
-  The :tx-timestamp and :rcv-timestamp of the protocol may be updated by the update-procotol function.
-
+   For encodingMAVLink 2.0:
+     The system-id and component-id are taken from the channel, but maybe
+     provided in the encode message-map. Note that if signing is active (i.e. the secret-key
+     has a value) then the link-id must be given in the message-map, otherwise the default
+     value will be used for the link id (see the encode function.)
+     Timestamps just indicate forward progression (once a timestamp is seen, ignore
+     anything earlier). So, the initial values of the encoding timestamp
+     is 0. See the sign-packet function for timestamping for encoding.
    "
-  ([mavlink protocol system-id component-id] (open-channel mavlink protocol system-id component-id 0))
-  ([mavlink protocol system-id component-id link-id]
+  [mavlink {:keys [protocol system-id component-id link-id] :as options}]
   {:pre [(instance? Long system-id)
          (instance? Long component-id)
-         (instance? Long link-id)
          (map? mavlink)
          (keyword? protocol)
          (map? (:messages-by-keyword mavlink))
          (map? (:messages-by-id mavlink))
          ]}
    (declare start-state)
-   (when (= protocol :mavlink2)
-     (println "FIXME currently the channel is per sys-id, comp-id, link-id ... this will not work in the long run, the channel should be per sys-id, comp-id for transmist, but decode-mavlink2 should track the incoming messages by sys-id, comp-id, link-id and keep a separate rcv-timestamp for each tuple."))
   {:mavlink mavlink
    :protocol (atom (or protocol :mavlink1))
-   :secret-key (atom nil)                           ; MAVLink 2.0 encoding only
-   :tx-timestamp (atom 0)                           ; MAVLInk 2.0 encoding only
-   :link-id (atom (.byteValue (new Long ^long link-id)))  ; MAVLink 2.0 encoding only
-   :accept-unsigned-packets (atom true)             ; MAVLink 2.0 decoding only
-   :rcv-timestamp (atom (get-timestamp))            ; MAVLInk 2.0 decoding only
-                                                    ; FIXME this needs to be set before first message is decoded when signing is active.
+   :secret-key (atom nil)               ; MAVLink 2.0 encoding only, if nil not signing
+   :encode-timestamp (atom 0)           ; MAVLInk 2.0 encoding only, timestamp of last signed message
+   :signing-tuples (atom {})            ; MAVLink 2.0 encoding only, decode timestamps
+   :accept-unsigned-packets (atom true) ; MAVLink 2.0 decoding only
    :system-id system-id
    :component-id component-id
+   :link-id (atom (if link-id link-id 0)) ; MAVLink 2.0, encoding only
    :sequence-id-atom (atom 0)
    :last-values (apply merge (map #(let [{:keys [msg-key default-msg]} %]
                                      {msg-key (ref default-msg)})
                                   (vals (:messages-by-keyword mavlink))))
    :decode-sm (atom start-state)
-   :decode-message-info (atom nil)
+   :decode-message-info (atom nil)      ; internal to decode state machine
+   :input-buffer                        ; internal to decoding
+     (let [byte-buffer (ByteBuffer/allocate MAX-MESSAGE-SIZE)]
+       (.order byte-buffer ByteOrder/LITTLE_ENDIAN)
+       byte-buffer)
    :statistics (atom {:bytes-received 0
                       :messages-decoded 0
                       :messages-encoded 0
-                      :skipped-tx-sequences 0
+                      :skipped-encode-sequences 0
                       :bad-checksums 0
                       :bad-signatures 0
                       :bad-timestamps 0
                       :dropped-unsigned 0})
-   :input-buffer
-     (let [byte-buffer (ByteBuffer/allocate MAX-MESSAGE-SIZE)]
-       (.order byte-buffer ByteOrder/LITTLE_ENDIAN)
-       byte-buffer)}))
+   })
 
 (defn encode-mavlink1
-  "Encodes a mavlink1 message map returning a byte array, suitable for sending over the wire.
-   The system-id, component-id and sequence-id may all be specified in the message map;
-   if specified in the message map, the calues will override the default values. If the
-   the sequence-id is specified, in addition to overriding the default sequence-id, the
-   atom used to generate the default sequence-id is set to this value."
+  "Encodes a MAVLink1 message."
   ^bytes [{:keys [mavlink statistics system-id component-id sequence-id-atom] :as channel}
           {:keys [message-id] :as message-map}]
   {:pre [(keyword? message-id)
@@ -245,7 +230,7 @@
                        (reset! sequence-id-atom (mod seq-id- 256))
                        (swap! sequence-id-atom #(mod (inc %) 256)))
         merged-message (merge default-msg
-                              (dissoc message-map :message-id :system-id :component-id :sequence-id))
+                              (dissoc message-map :message-id :system-id :component-id :sequence-id :link-id))
         bad-keys (let [bad-keys (filterv (fn[k] (nil? (k default-msg))) (keys merged-message))]
                    (when-not (empty? bad-keys)
                      (throw (ex-info "Unknown message fields"
@@ -293,21 +278,21 @@
    packet starting at the signature-idx. Then the signature is calculated
    using SHA256 implemeneted by java.securty.MessageDigest.
 
-   The signature is the first 6  bytes of the SHA256 hash of the bytes of the
-   secret-key then the packet. Those bytes are then added to appended to the packet.
+   signature = sha256(secret_key + header + payload + CRC + link-ID + timestamp)
   "
-  [{:keys [secret-key tx-timestamp] :as channel} ^bytes packet signature-start-idx link-id]
+  [{:keys [secret-key encode-timestamp] :as channel} ^bytes packet
+   signature-start-idx link-id]
   {:pre [@secret-key]}
   (let [curr-timestamp (get-timestamp)
         sha256-start-idx (+ signature-start-idx 7) ; the packet plus the link id and timestamp
         timestamp-array (let [bb (ByteBuffer/allocate 8)]
                           (.order bb ByteOrder/LITTLE_ENDIAN)
-                          (if (> curr-timestamp @tx-timestamp)
-                            (reset! tx-timestamp curr-timestamp)
-                            (swap! tx-timestamp inc))
-                          (.putLong bb ^long @tx-timestamp)
+                          (if (> curr-timestamp @encode-timestamp)
+                            (reset! encode-timestamp curr-timestamp)
+                            (swap! encode-timestamp inc))
+                          (.putLong bb ^long @encode-timestamp)
                           (.array bb))]
-    ; link ID
+    ; add link ID
     (aset-byte packet signature-start-idx link-id) 
     ; timestamp
     (loop [idx (inc signature-start-idx)
@@ -317,27 +302,26 @@
         (aset-byte packet idx (aget timestamp-array tidx)) 
         (recur (inc idx)
                (inc tidx))))
-    ; SHA256 signature
-    (.reset sha256)
-    (.update sha256 @secret-key 0 32)
-    (.update sha256 packet 0 sha256-start-idx)
-    (let [sha256-bytes ^bytes (.digest sha256)]
+    ; SHA256 signature at this point the packet has everything except the secret-key
+    (.reset ^MessageDigest sha256)
+    (.update ^MessageDigest sha256 @secret-key 0 32)
+    (.update ^MessageDigest sha256 packet 0 sha256-start-idx)
+    (let [sha256-bytes ^bytes (.digest ^MessageDigest  sha256)]
       (loop [idx sha256-start-idx
              sidx 0]
-        ; only take the first 6 bytes of the sha256 bytes
+        ; only take the first 6 bytes (i.e. 48 bits) of the sha256 bytes
         (when (< sidx 6) 
           (aset-byte packet idx (aget sha256-bytes sidx)) 
           (recur (inc idx)
                  (inc sidx)))))))
 
 (defn encode-mavlink2
-  "Encodes a message map returning a byte array, suitable for sending over the wire.
-   The system-id, component-id, link-id and sequence-id may all be specified in the message map;
-   if specified in the message map, the values will override the default values. If the
-   the sequence-id is specified, in addition to overriding the default sequence-id, the
-   atom used to generate the default sequence-id is set to this value."
-  ^bytes [{:keys [mavlink statistics system-id component-id link-id sequence-id-atom
-                  secret-key] :as channel}
+  "Encodes a MAVLink 2.0 message. If the message is to be signed (the secret-key of
+   the channel is not nil, then the link-id must  be specified in the message map,
+   otherwise the default value 0 is used.
+  "
+  ^bytes [{:keys [mavlink statistics system-id component-id sequence-id-atom
+                  secret-key link-id] :as channel}
           {:keys [message-id] :as message-map}]
   {:pre [(message-id (:messages-by-keyword mavlink))
          (<= 0 (:msg-id (message-id (:messages-by-keyword mavlink))) 16777215)
@@ -353,6 +337,7 @@
                 crc-seed default-msg ^long msg-id msg-key]} (message-id messages-by-keyword)
         ^long sys-id (or (:system-id message-map) system-id)
         ^long comp-id (or (:component-id message-map) component-id)
+        ^long link-id (or (:link-id message-map) @link-id)
         ^long seq-id (if-let [seq-id- (:sequence-id message-map)]
                        (reset! sequence-id-atom (mod seq-id- 256))
                        (swap! sequence-id-atom #(mod (inc %) 256)))
@@ -375,25 +360,10 @@
         payload (let [byte-buffer (ByteBuffer/allocate extension-payload-size)]
                   (.order byte-buffer ByteOrder/LITTLE_ENDIAN)
                   byte-buffer)
-        packed (byte-array (+ extension-payload-size
-                              (if @secret-key
-                                MAVLINK2-HDR-CRC-SIGN-SIZE
-                                MAVLINK2-HDR-CRC-SIZE)))
         incompat-flags (if @secret-key
                          SIGN-PACKETS-FLAG  ; only one possible flag, so no or'ing necessary
                          0)
         compat-flags 0]
-    (aset-byte packed 0 MAVLINK2-START-BYTE)
-    (aset-byte packed 1 (.byteValue (new Long extension-payload-size)))
-    (aset-byte packed 2 (.byteValue (new Long incompat-flags)))
-    (aset-byte packed 3 (.byteValue (new Long compat-flags)))
-    (aset-byte packed 4 (.byteValue (new Long seq-id)))
-    (aset-byte packed 5 (.byteValue (new Long sys-id)))
-    (aset-byte packed 6 (.byteValue (new Long comp-id)))
-    (aset-byte packed 7 (.byteValue (new Long (bit-and msg-id 0xff))))
-    (aset-byte packed 8 (.byteValue (new Long (bit-and (bit-shift-right msg-id 8) 0xff))))
-    (aset-byte packed 9 (.byteValue (new Long (bit-and (bit-shift-right msg-id 16) 0xff))))
-
     ; encode the payload
     (doseq [encode-fn (concat encode-fns extension-encode-fns)]
       (encode-fn payload message))
@@ -403,8 +373,22 @@
                 (zero? (.get payload (dec (.position payload)))))
       (.position payload (dec (.position payload))))
 
-    (let [trimmed-payload-size (.position payload)]
+    ; size of byte array now known, so can create it and fill it in
+    (let [trimmed-payload-size (.position payload)
+          packed (byte-array (+ trimmed-payload-size
+                                (if @secret-key
+                                  MAVLINK2-HDR-CRC-SIGN-SIZE
+                                  MAVLINK2-HDR-CRC-SIZE)))]
+      (aset-byte packed 0 MAVLINK2-START-BYTE)
       (aset-byte packed 1 (byte-to-long (.byteValue (new Long trimmed-payload-size))))
+      (aset-byte packed 2 (.byteValue (new Long incompat-flags)))
+      (aset-byte packed 3 (.byteValue (new Long compat-flags)))
+      (aset-byte packed 4 (.byteValue (new Long seq-id)))
+      (aset-byte packed 5 (.byteValue (new Long sys-id)))
+      (aset-byte packed 6 (.byteValue (new Long comp-id)))
+      (aset-byte packed 7 (.byteValue (new Long (bit-and msg-id 0xff))))
+      (aset-byte packed 8 (.byteValue (new Long (bit-and (bit-shift-right msg-id 8) 0xff))))
+      (aset-byte packed 9 (.byteValue (new Long (bit-and (bit-shift-right msg-id 16) 0xff))))
 
       ; now copy the array from the payload to the packed array.
       (when (pos? trimmed-payload-size)
@@ -421,13 +405,13 @@
         (sign-packet channel
                      packed
                      (+ MAVLINK2-HDR-CRC-SIZE trimmed-payload-size)
-                     (or (:link-id message-map) @link-id)))  ; pass in the link id to sign the packet
+                     link-id))
       packed)))
 
 (defn encode
   "Encodes a message map returning a byte array, suitable for sending over the wire.
    The system-id, component-id and sequence-id may all be specified in the message map;
-   if specified in the message map, the calues will override the default values. If the
+   if specified in the message map, the values will override the default values. If the
    the sequence-id is specified, in addition to overriding the default sequence-id, the
    atom used to generate the default sequence-id is set to this value."
   ^bytes [{:keys [mavlink statistics protocol] :as channel}
@@ -444,18 +428,21 @@
                                  {:cause :bad-protocol
                                   :protocol @protocol})))]
     (when packed
+      (when @print-encoded (print "Encoded bytes: ") (pprint packed))
       (swap! statistics #(assoc % :messages-encoded (inc (:messages-encoded %)))))
     packed))
 
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Start decode state machine state functions.
+;; Decode state machine state functions.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (declare start-state)
 
 (defn decode-mavlink1
+  "Decode a MAVLink 1.0 message in the channel's input-buffer. Return a message
+   map of the decoded message."
   [{:keys [decode-sm decode-message-info 
            ^ByteBuffer input-buffer mavlink statistics] :as channel}]
   (let [{:keys [crc-seed payload-size msg-key decode-fns]} @decode-message-info
@@ -484,11 +471,11 @@
         nil))))
 
 (defn decode-mavlink2
-  "Decode the message int he channel's input buffer. It is assumed the message is a
-   MAVLink 2 message. If there is a signature, it is assumed the signature has been
-   verified and the link id extracted from the signature and passed in. This is because
-   if the message was trimmed of trailing zeroes, the zeroes will be written on to the
-   end of the message, possibly/probably overwriting the checksum and signature bytes
+  "Decode a MAVLink 2.0 message in the channel's input buffer.  If there is a
+   signature, it is assumed the signature has been verified and the link id
+   extracted from the signature and passed in. This is because if the message was
+   trimmed of trailing zeroes, the zeroes will be written on to the end of the
+   message, possibly/probably overwriting the checksum and signature bytes
    before decoding the payload of the message."
   [{:keys [decode-sm decode-message-info 
            ^ByteBuffer input-buffer mavlink statistics] :as channel}
@@ -525,62 +512,72 @@
         nil))))
 
 (defn verify-signature
-  "Given an entire packet (the byte array), including the 13 signing bytes,
-   the start-signature-idx, and the decoded message, verify the signature of the packet by making
-   sure the timetamp is valid (at least one hiher than the last rcv-timestamp and within one minute
-   of the last timestamp) and that the first 6 bytes of the sha256 of thepacket mactches the sha256 bytes
+  "verify the signature of the MVLink 2.0 message in the channel's input-buffer.
+   The start-signature-idx is the index of the first byte of the signature, which is
+   also the length of the message including the CRC bytes. Verify the signature of the
+   packet by making sure the timetamp is valid (at least one hiher than the last
+   timestamp for the signing tuple and within one minute of the last timestamp)
+   and that the first 6 bytes of the sha256 of the packet matches the sha256 bytes
    in the packet.
 
-   If the timestamp and the signature are valid, the rcv-timestamp is updated and
+   If the timestamp and the signature are valid, the signing tuple timestamp is updated and
    the decoded message is returned, otherwise the statistics are updated and an
    error is thrown. The error is thrown so that the decoding call can catch the error
-   and if necessary (such as updating the rcv-timestamp) cab take corrective action. The decoded
-   message is included in the thrown error."
-  [{:keys [decode-message-info link-id secret-key rcv-timestamp statistics ^ByteBuffer input-buffer] :as channel}
+   The decoded message is included in the thrown error."
+  [{:keys [decode-message-info secret-key statistics
+           ^ByteBuffer input-buffer signing-tuples] :as channel}
    ^long start-signature-idx]
   (let [packet (.array input-buffer)
+        tuple (sequence [(.get input-buffer 5)                      ; system id
+                         (.get input-buffer 6)                      ; component id
+                         (.get input-buffer start-signature-idx)])  ; link id
+        tuple-timestamp (get @signing-tuples tuple)
         payload-size (byte-to-long (aget packet 1))
         timestamp (let [bb (ByteBuffer/allocate 8)]
                     (.order bb ByteOrder/LITTLE_ENDIAN)
                     (System/arraycopy packet (inc start-signature-idx) (.array bb) 0 6)
                     (.put bb 6 ZERO-BYTE)
                     (.put bb 7 ZERO-BYTE)
-                    (.getLong bb))
-        start-sha256-idx (+ start-signature-idx 7)]
-    (.reset sha256)
-    (.update sha256 @secret-key 0 32)
-    (.update sha256 packet 0 start-sha256-idx) ; The link-id and timestamps bytes are included
-    (if (< @rcv-timestamp timestamp (+ @rcv-timestamp ONE-MINUTE))
-      (let [sha256-bytes ^bytes (.digest sha256)
-            valid-signature
-              (loop [idx start-sha256-idx
-                     sidx 0]
-                (if (>= sidx 6) 
-                  ; if we got through the first 6 bytes, it's valid
-                  true
-                  (if (not= (aget packet idx) (aget sha256-bytes sidx)) 
-                    ; if any byte is invalid immediately return false
-                    false
-                    ; otherwise go to the next index
-                    (recur (inc idx)
-                           (inc sidx)))))]
-        (if valid-signature
-          (do
-            (reset! rcv-timestamp timestamp)
-            (decode-mavlink2 channel (.get input-buffer start-signature-idx)))
-          (do
-            (swap! statistics #(assoc % :bad-signatures (inc (:bad-signatures %))))
-            (throw (ex-info "Decoding signature sha256 error."
-                            {:cause :bad-signature
-                             :msg-id (:msg-id @decode-message-info)
-                             :timestamp timestamp})))))
+                    (.getLong bb))        start-sha256-idx (+ start-signature-idx 7)]
+    (if secret-key
       (do
-        (swap! statistics #(assoc % :bad-timestamps (inc (:bad-timestamps %))))
-        (throw (ex-info "Decoding signature timestamp error."
-                        {:cause :bad-timestamp
-                         :msg-id (:msg-id @decode-message-info)
-                         :rcv-timestamp @rcv-timestamp
-                         :timestamp timestamp}))))))
+        (.reset ^MessageDigest sha256)
+        (.update ^MessageDigest sha256 @secret-key 0 32)
+        (.update ^MessageDigest sha256 packet 0 start-sha256-idx) ; The link-id and timestamps bytes are included
+        (if (or (nil? tuple-timestamp)
+                (< tuple-timestamp timestamp (+ tuple-timestamp ONE-MINUTE)))
+          (let [sha256-bytes ^bytes (.digest ^MessageDigest sha256)
+                valid-signature
+                  (loop [idx start-sha256-idx
+                         sidx 0]
+                    (if (>= sidx 6) 
+                      ; if we got through the first 6 bytes, it's valid
+                      true
+                      (if (not= (aget packet idx) (aget sha256-bytes sidx)) 
+                        ; if any byte is invalid immediately return false
+                        false
+                        ; otherwise go to the next index
+                        (recur (inc idx)
+                               (inc sidx)))))]
+            (if valid-signature
+              (do
+                (swap! signing-tuples assoc tuple timestamp)
+                (decode-mavlink2 channel (.get input-buffer start-signature-idx)))
+              (do
+                (swap! statistics #(assoc % :bad-signatures (inc (:bad-signatures %))))
+                (throw (ex-info "Decoding signature sha256 error."
+                                {:cause :bad-signature
+                                 :msg-id (:msg-id @decode-message-info)
+                                 :timestamp timestamp})))))
+          (do
+            (swap! statistics #(assoc % :bad-timestamps (inc (:bad-timestamps %))))
+            (throw (ex-info "Decoding signature timestamp error."
+                            {:cause :bad-timestamp
+                             :msg-id (:msg-id @decode-message-info)
+                             :signing-tuple tuple
+                             :tuple-timestamp tuple-timestamp
+                             :timestamp timestamp})))))
+      (decode-mavlink2 channel (.get input-buffer start-signature-idx)))))
 
 (defn signature-state
   [{:keys [decode-sm ^ByteBuffer input-buffer protocol statistics] :as channel} a-byte]
@@ -600,6 +597,7 @@
    and restart the decode state machine.t"
   [{:keys [statistics decode-sm ^ByteBuffer input-buffer accept-unsigned-packets] :as channel} a-byte]
   (.put input-buffer ^byte a-byte)
+  (when @print-decoded (print "Decoded bytes: ") (pprint (.array input-buffer)))
   (if (= (.get input-buffer 0) MAVLINK2-START-BYTE)
     (if (zero? (bit-and (.get input-buffer 2) IFLAG-SIGNED))
       ; No signature, if accepting unsigned messages then decode and return the message

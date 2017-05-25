@@ -55,8 +55,8 @@
      (doseq [idx (range start-idx last-idx)]
        (.update-checksum crc
                          (if (.isArray (class the-bytes))
-                           (aget ^"[B"the-bytes idx)
-                           (.get the-bytes idx))))
+                           (aget ^bytes the-bytes idx)
+                           (.get ^java.nio.ByteBuffer the-bytes idx))))
      (when crc-seed
        (.update-checksum crc crc-seed))
      (.crcValue crc))))
@@ -70,7 +70,9 @@
                                   ]
                      :descriptions true}))
 
-(def channel (open-channel mavlink :mavlink1 99 88))
+(def channel (open-channel mavlink {:protocol :mavlink1
+                                    :system-id 99
+                                    :component-id 88}))
 
 (def mavlink-2 (parse {:xml-sources [{:xml-file "ardupilotmega.xml"
                                       :xml-source (-> "test/resources/ardupilotmega.xml" io/input-stream)}
@@ -78,7 +80,9 @@
                                       :xml-source (-> "test/resources/common.xml" io/input-stream)}
                                      {:xml-file "uAvionix.xml"
                                       :xml-source (-> "test/resources/uAvionix.xml" io/input-stream)}]}))
-(def channel-2 (open-channel mavlink-2 :mavlink2 99 88))
+(def channel-2 (open-channel mavlink-2 {:protocol :mavlink2
+                                        :system-id 99
+                                        :component-id 88}))
 
 (defn get-test-message 
   "Given a message's specification map, generate a test message-map for it."
@@ -192,7 +196,9 @@
                         {:xml-sources [{:xml-file "test-parse.xml"
                                         :xml-source (-> "test/resources/test-parse.xml" io/input-stream)}]
                          :descriptions true})
-          channel-simple (open-channel mavlink-simple :mavlink1 99 88)]
+          channel-simple (open-channel mavlink-simple {:protocol :mavlink1
+                                                       :system-id 99
+                                                       :component-id 88})]
       ;(pprint channel-simple)
       (is (thrown-with-msg? Exception #"conflicts" 
                   (parse
@@ -246,7 +252,9 @@
                                        {:xml-file "uAvionix.xml"
                                         :xml-source (-> "test/resources/uAvionix.xml" io/input-stream)}]
                          })
-          channel-complex (open-channel mavlink-complex :mavlink1 99 88)
+          channel-complex (open-channel mavlink-complex {:protocol :mavlink1
+                                                         :system-id 99
+                                                         :component-id 88})
           simple-message (do
                            ;(is (nil? (decode-byte-mavlink1 channel-complex (.byteValue (Long/valueOf "fe" 16)))))
                            ;(is (nil? (decode-byte-mavlink1 channel-complex (byte 3))))
@@ -429,26 +437,28 @@
       ))
   (testing "Testing MAVLink 2.0 signatures."
     (let [secret-key (bytes (byte-array (map (comp byte int) "abcdefghijklmnopqrstuvwxyz123456")))]
-      (update-channel channel-2 :secret-key secret-key
-                                :link-id 15)
+      (update-channel channel-2 :secret-key secret-key)
       (let [bs-empty (encode channel-2 {:message-id :meminfo :sequence-id 1})
             bs-1 (encode channel-2 {:message-id :meminfo :brkval 44})
             bs-2 (encode channel-2 {:message-id :meminfo :freemem 33})
             bs-3 (encode channel-2 {:message-id :meminfo :freemem32 66})
             bs-all (encode channel-2 {:message-id :meminfo :freemem32 66 :brkval 44 :freemem 33})]
-        (is (= [{:message-id :meminfo, :sequence-id 1, :system-id 99, :component-id 88, :link-id 15, :brkval 0, :freemem 0, :freemem32 0}]
+        (is (= [{:message-id :meminfo, :sequence-id 1, :system-id 99, :component-id 88, :link-id 0, :brkval 0, :freemem 0, :freemem32 0}]
                (decode-bytes channel-2 bs-empty)))
-        (is (= [{:message-id :meminfo, :sequence-id 2, :system-id 99, :component-id 88, :link-id 15, :brkval 44, :freemem 0, :freemem32 0}]
+        (is (= [{:message-id :meminfo, :sequence-id 2, :system-id 99, :component-id 88, :link-id 0, :brkval 44, :freemem 0, :freemem32 0}]
                (decode-bytes channel-2 bs-1)))
-        (is (= [{:message-id :meminfo, :sequence-id 3, :system-id 99, :component-id 88, :link-id 15, :brkval 0, :freemem 33, :freemem32 0}]
+        (is (= [{:message-id :meminfo, :sequence-id 3, :system-id 99, :component-id 88, :link-id 0, :brkval 0, :freemem 33, :freemem32 0}]
                (decode-bytes channel-2 bs-2)))
-        (is (= [{:message-id :meminfo, :sequence-id 4, :system-id 99, :component-id 88, :link-id 15, :brkval 0, :freemem 0, :freemem32 66}]
+        (is (= [{:message-id :meminfo, :sequence-id 4, :system-id 99, :component-id 88, :link-id 0, :brkval 0, :freemem 0, :freemem32 66}]
                (decode-bytes channel-2 bs-3)))
-        (is (= [{:message-id :meminfo, :sequence-id 5, :system-id 99, :component-id 88, :link-id 15, :brkval 44, :freemem 33, :freemem32 66}]
+        (is (= [{:message-id :meminfo, :sequence-id 5, :system-id 99, :component-id 88, :link-id 0, :brkval 44, :freemem 33, :freemem32 66}]
                (decode-bytes channel-2 bs-all)))
       )))
   (testing "Testing MAVLink 2.0 signatures, alternate open-channel interface."
-    (let [new-channel (open-channel mavlink-2 :mavlink2 99 88 15)
+    (let [new-channel (open-channel mavlink-2 {:protocol :mavlink2
+                                               :system-id 99
+                                               :component-id 88
+                                               :link-id 15})
           secret-key (bytes (byte-array (map (comp byte int) "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456")))]
       (update-channel new-channel :secret-key secret-key)
       (let [bs-empty (encode new-channel {:message-id :meminfo :sequence-id 1})
