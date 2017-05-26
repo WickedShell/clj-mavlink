@@ -8,10 +8,9 @@
 
 (use 'clojure.pprint)  ;; FIXME delete this sucker after testing
 (def print-encoded (atom false))
-(def print-decoded (atom true))
+(def print-decoded (atom false))
 
 (defonce IFLAG-SIGNED 0x01)
-(def sha256 (MessageDigest/getInstance "SHA-256"))
 
 (def ^:const MAVLINK1-START-VALUE 254)
 (defonce MAVLINK1-START-BYTE (.byteValue (new Long MAVLINK1-START-VALUE)))
@@ -185,9 +184,11 @@
    :encode-timestamp (atom 0)           ; MAVLInk 2.0 encoding only, timestamp of last signed message
    :signing-tuples (atom {})            ; MAVLink 2.0 encoding only, decode timestamps
    :accept-unsigned-packets (atom true) ; MAVLink 2.0 decoding only
+   :decode-sha256 (MessageDigest/getInstance "SHA-256")
+   :encode-sha256 (MessageDigest/getInstance "SHA-256")
    :system-id system-id
    :component-id component-id
-   :link-id (atom (if link-id link-id 0)) ; MAVLink 2.0, encoding only
+   :link-id (atom (or link-id 0)) ; MAVLink 2.0, encoding only
    :sequence-id-atom (atom 0)
    :last-values (apply merge (map #(let [{:keys [msg-key default-msg]} %]
                                      {msg-key (ref default-msg)})
@@ -280,7 +281,7 @@
 
    signature = sha256(secret_key + header + payload + CRC + link-ID + timestamp)
   "
-  [{:keys [secret-key encode-timestamp] :as channel} ^bytes packet
+  [{:keys [secret-key encode-timestamp ^MessageDigest encode-sha256] :as channel} ^bytes packet
    signature-start-idx link-id]
   {:pre [@secret-key]}
   (let [curr-timestamp (get-timestamp)
@@ -292,28 +293,17 @@
                             (swap! encode-timestamp inc))
                           (.putLong bb ^long @encode-timestamp)
                           (.array bb))]
-    ; add link ID
+    ; add link ID to the packet
     (aset-byte packet signature-start-idx link-id) 
-    ; timestamp
-    (loop [idx (inc signature-start-idx)
-           tidx 0]
-      ; only take the first 6 bytes of the timestamp
-      (when (< tidx 6) 
-        (aset-byte packet idx (aget timestamp-array tidx)) 
-        (recur (inc idx)
-               (inc tidx))))
-    ; SHA256 signature at this point the packet has everything except the secret-key
-    (.reset ^MessageDigest sha256)
-    (.update ^MessageDigest sha256 @secret-key 0 32)
-    (.update ^MessageDigest sha256 packet 0 sha256-start-idx)
-    (let [sha256-bytes ^bytes (.digest ^MessageDigest  sha256)]
-      (loop [idx sha256-start-idx
-             sidx 0]
-        ; only take the first 6 bytes (i.e. 48 bits) of the sha256 bytes
-        (when (< sidx 6) 
-          (aset-byte packet idx (aget sha256-bytes sidx)) 
-          (recur (inc idx)
-                 (inc sidx)))))))
+    ; add the timestamp to the packet
+    (System/arraycopy timestamp-array 0 packet (inc signature-start-idx) 6)
+    ; calculate the sha256 from the secret-key and the packet
+    (.reset encode-sha256)
+    (.update encode-sha256 @secret-key 0 32)
+    (.update encode-sha256 packet 0 sha256-start-idx)
+    (let [sha256-bytes ^bytes (.digest encode-sha256)]
+      ; add the first 6 bytes of the sha256 to the packet
+      (System/arraycopy sha256-bytes 0 packet sha256-start-idx 6))))
 
 (defn encode-mavlink2
   "Encodes a MAVLink 2.0 message. If the message is to be signed (the secret-key of
@@ -445,30 +435,19 @@
    map of the decoded message."
   [{:keys [decode-sm decode-message-info 
            ^ByteBuffer input-buffer mavlink statistics] :as channel}]
-  (let [{:keys [crc-seed payload-size msg-key decode-fns]} @decode-message-info
-        last-idx ^long (+ payload-size MAVLINK1-HDR-SIZE)
-        checksum-lsb (byte-to-long (.get input-buffer last-idx))
-        checksum (bit-or (bit-and checksum-lsb 0xff)
-                         (bit-and (bit-shift-left (.get input-buffer (inc last-idx)) 8) 0xff00))
-        checksum-calc (compute-checksum input-buffer 1 last-idx crc-seed)]
-    (if (== checksum checksum-calc)
-      (do
-        (.position input-buffer MAVLINK1-HDR-SIZE)
-        ; decode the message, restart the decode state machine, then
-        ; save the message and return it!
-        (let [message (apply merge
-                             {:message-id msg-key
-                              :sequence-id (byte-to-long (new Long (.get input-buffer 2)))
-                              :system-id (byte-to-long (new Long (.get input-buffer 3)))
-                              :component-id (byte-to-long (new Long (.get input-buffer 4)))}
-                             (map #(% input-buffer) decode-fns))]
-          (swap! statistics assoc :messages-decoded (inc (:messages-decoded @statistics)))
-          (reset! decode-sm start-state)
-          message))
-      (do
-        (swap! statistics assoc :bad-checksums (inc (:bad-checksums @statistics)))
-        (reset! decode-sm start-state)
-        nil))))
+  (let [{:keys [payload-size msg-key decode-fns]} @decode-message-info]
+    ; position the buffer to the start of the payload
+    (.position input-buffer MAVLINK1-HDR-SIZE)
+    ; decode the message, restart the decode state machine, then
+    ; save the message and return it!
+    (let [message (apply merge
+                         {:message-id msg-key
+                          :sequence-id (byte-to-long (new Long (.get input-buffer 2)))
+                          :system-id (byte-to-long (new Long (.get input-buffer 3)))
+                          :component-id (byte-to-long (new Long (.get input-buffer 4)))}
+                         (map #(% input-buffer) decode-fns))]
+      (swap! statistics assoc :messages-decoded (inc (:messages-decoded @statistics)))
+      message)))
 
 (defn decode-mavlink2
   "Decode a MAVLink 2.0 message in the channel's input buffer.  If there is a
@@ -480,36 +459,27 @@
   [{:keys [decode-sm decode-message-info 
            ^ByteBuffer input-buffer mavlink statistics] :as channel}
    link-id]
-  (let [{:keys [extension-payload-size crc-seed msg-key decode-fns extension-decode-fns]} @decode-message-info
-        msg-payload-size (byte-to-long (.get input-buffer 1))
-        last-idx ^long (+ msg-payload-size MAVLINK2-HDR-SIZE)
-        checksum-lsb (byte-to-long (.get input-buffer (int last-idx)))
-        checksum (bit-or (bit-and checksum-lsb 0xff)
-                         (bit-and (bit-shift-left (.get input-buffer (inc last-idx)) 8) 0xff00))
-        checksum-calc (compute-checksum input-buffer 1 last-idx crc-seed)]
-    (if (== checksum checksum-calc)
-      (do
-        (.position input-buffer (+ MAVLINK2-HDR-SIZE msg-payload-size))
-        (when (> extension-payload-size msg-payload-size)
-          (doseq [i (range (- extension-payload-size msg-payload-size))]
-            (.put input-buffer ^byte ZERO-BYTE)))
-        ; decode the message, restart the decode state machine, then
-        ; save the message and return it!
-        (.position input-buffer MAVLINK2-HDR-SIZE)
-        (let [message (apply merge
-                             {:message-id msg-key
-                              :sequence-id (byte-to-long (new Long (.get input-buffer 4)))
-                              :system-id (byte-to-long (new Long (.get input-buffer 5)))
-                              :component-id (byte-to-long (new Long (.get input-buffer 6)))
-                              :link-id link-id}
-                             (map #(% input-buffer) (concat decode-fns extension-decode-fns)))]
-          (swap! statistics assoc :messages-decoded (inc (:messages-decoded @statistics)))
-          (reset! decode-sm start-state)
-          message))
-      (do
-        (swap! statistics assoc :bad-checksums (inc (:bad-checksums @statistics)))
-        (reset! decode-sm start-state)
-        nil))))
+  (let [{:keys [extension-payload-size msg-key decode-fns extension-decode-fns]} @decode-message-info
+        msg-payload-size (byte-to-long (.get input-buffer 1))]
+    ; position the buffer to the end of the payload
+    (.position input-buffer (+ MAVLINK2-HDR-SIZE msg-payload-size))
+    ; replace trimmed bytes
+    (when (> extension-payload-size msg-payload-size)
+      (doseq [i (range (- extension-payload-size msg-payload-size))]
+        (.put input-buffer ^byte ZERO-BYTE)))
+    ; position the buffer at the start of the payload
+    (.position input-buffer MAVLINK2-HDR-SIZE)
+    ; decode the message, restart the decode state machine, then
+    ; save the message and return it!
+    (let [message (apply merge
+                         {:message-id msg-key
+                          :sequence-id (byte-to-long (new Long (.get input-buffer 4)))
+                          :system-id (byte-to-long (new Long (.get input-buffer 5)))
+                          :component-id (byte-to-long (new Long (.get input-buffer 6)))
+                          :link-id link-id}
+                         (map #(% input-buffer) (concat decode-fns extension-decode-fns)))]
+      (swap! statistics assoc :messages-decoded (inc (:messages-decoded @statistics)))
+      message)))
 
 (defn verify-signature
   "verify the signature of the MVLink 2.0 message in the channel's input-buffer.
@@ -524,9 +494,10 @@
    the decoded message is returned, otherwise the statistics are updated and an
    error is thrown. The error is thrown so that the decoding call can catch the error
    The decoded message is included in the thrown error."
-  [{:keys [decode-message-info secret-key statistics
-           ^ByteBuffer input-buffer signing-tuples] :as channel}
+  [{:keys [decode-message-info secret-key statistics accept-unsigned-packets
+           ^ByteBuffer input-buffer signing-tuples ^MessageDigest decode-sha256] :as channel}
    ^long start-signature-idx]
+  {:pre [@secret-key]}
   (let [packet (.array input-buffer)
         tuple (sequence [(.get input-buffer 5)                      ; system id
                          (.get input-buffer 6)                      ; component id
@@ -538,46 +509,46 @@
                     (System/arraycopy packet (inc start-signature-idx) (.array bb) 0 6)
                     (.put bb 6 ZERO-BYTE)
                     (.put bb 7 ZERO-BYTE)
-                    (.getLong bb))        start-sha256-idx (+ start-signature-idx 7)]
-    (if secret-key
-      (do
-        (.reset ^MessageDigest sha256)
-        (.update ^MessageDigest sha256 @secret-key 0 32)
-        (.update ^MessageDigest sha256 packet 0 start-sha256-idx) ; The link-id and timestamps bytes are included
-        (if (or (nil? tuple-timestamp)
-                (< tuple-timestamp timestamp (+ tuple-timestamp ONE-MINUTE)))
-          (let [sha256-bytes ^bytes (.digest ^MessageDigest sha256)
-                valid-signature
-                  (loop [idx start-sha256-idx
-                         sidx 0]
-                    (if (>= sidx 6) 
-                      ; if we got through the first 6 bytes, it's valid
-                      true
-                      (if (not= (aget packet idx) (aget sha256-bytes sidx)) 
-                        ; if any byte is invalid immediately return false
-                        false
-                        ; otherwise go to the next index
-                        (recur (inc idx)
-                               (inc sidx)))))]
-            (if valid-signature
-              (do
-                (swap! signing-tuples assoc tuple timestamp)
-                (decode-mavlink2 channel (.get input-buffer start-signature-idx)))
-              (do
-                (swap! statistics #(assoc % :bad-signatures (inc (:bad-signatures %))))
-                (throw (ex-info "Decoding signature sha256 error."
-                                {:cause :bad-signature
-                                 :msg-id (:msg-id @decode-message-info)
-                                 :timestamp timestamp})))))
+                    (.getLong bb))
+        start-sha256-idx (+ start-signature-idx 7)]
+    (.reset decode-sha256)
+    (.update decode-sha256 @secret-key 0 32)
+    (.update decode-sha256 packet 0 start-sha256-idx) ; The link-id and timestamps bytes are included
+    (if (or (nil? tuple-timestamp)
+            (< tuple-timestamp timestamp (+ tuple-timestamp ONE-MINUTE)))
+      (let [sha256-bytes ^bytes (.digest decode-sha256)
+            valid-signature
+              (loop [idx start-sha256-idx
+                     sidx 0]
+                (if (>= sidx 6) 
+                  ; if we got through the first 6 bytes, it's valid
+                  true
+                  (if (not= (aget packet idx) (aget sha256-bytes sidx)) 
+                    ; if any byte is invalid immediately return false
+                    false
+                    ; otherwise go to the next index
+                    (recur (inc idx)
+                           (inc sidx)))))]
+        (if (or valid-signature @accept-unsigned-packets)
           (do
-            (swap! statistics #(assoc % :bad-timestamps (inc (:bad-timestamps %))))
-            (throw (ex-info "Decoding signature timestamp error."
-                            {:cause :bad-timestamp
+            (when valid-signature
+              (swap! signing-tuples assoc tuple timestamp))
+            ; FIXME: if timestamp is larger then encode-timestamp, reset encode-timestamp to timestamp
+            (decode-mavlink2 channel (.get input-buffer start-signature-idx)))
+          (do
+            (swap! statistics #(assoc % :bad-signatures (inc (:bad-signatures %))))
+            (throw (ex-info "Decoding signature sha256 error."
+                            {:cause :bad-signature
                              :msg-id (:msg-id @decode-message-info)
-                             :signing-tuple tuple
-                             :tuple-timestamp tuple-timestamp
                              :timestamp timestamp})))))
-      (decode-mavlink2 channel (.get input-buffer start-signature-idx)))))
+      (do
+        (swap! statistics #(assoc % :bad-timestamps (inc (:bad-timestamps %))))
+        (throw (ex-info "Decoding signature timestamp error."
+                        {:cause :bad-timestamp
+                         :msg-id (:msg-id @decode-message-info)
+                         :signing-tuple tuple
+                         :tuple-timestamp tuple-timestamp
+                         :timestamp timestamp}))))))
 
 (defn signature-state
   [{:keys [decode-sm ^ByteBuffer input-buffer protocol statistics] :as channel} a-byte]
@@ -592,26 +563,43 @@
 
 (defn checksum-msb-state
   "This byte the msb of the checksum. Verify the checksum, if it verifies,
-   then decode the message and return it. Use the state map to hold the return message,
-   simply dissoc the fields that are not used. In case of error, update the statistics
-   and restart the decode state machine.t"
-  [{:keys [statistics decode-sm ^ByteBuffer input-buffer accept-unsigned-packets] :as channel} a-byte]
-  (.put input-buffer ^byte a-byte)
-  (when @print-decoded (print "Decoded bytes: ") (pprint (.array input-buffer)))
-  (if (= (.get input-buffer 0) MAVLINK2-START-BYTE)
-    (if (zero? (bit-and (.get input-buffer 2) IFLAG-SIGNED))
-      ; No signature, if accepting unsigned messages then decode and return the message
-      ; otherwise drop the message
-      (if @accept-unsigned-packets
-        (decode-mavlink2 channel nil)
-        (do
-          (swap! statistics assoc :dropped-unsigned (inc (:dropped-unsigned @statistics)))
-          nil))
-      ; The message is signed, must get all 13 signature bytes
+   then decode and return MAVLink 1 messages and MAVLink 2 messages that are not
+   signed. If the message is a signed MAVLink 2 message, then fetch the 13 bytes
+   by moving to the signature-state.
+  "
+  [{:keys [statistics decode-sm ^ByteBuffer input-buffer accept-unsigned-packets
+           decode-message-info] :as channel} a-byte]
+  (reset! decode-sm start-state)
+  (let [{:keys [crc-seed]} @decode-message-info
+        last-idx (dec (.position input-buffer))
+        checksum-lsb (byte-to-long (.get input-buffer last-idx))
+        checksum (bit-or (bit-and checksum-lsb 0xff)
+                         (bit-and (bit-shift-left a-byte 8) 0xff00))
+        checksum-calc (compute-checksum input-buffer 1 last-idx crc-seed)]
+    (if (== checksum checksum-calc)
       (do
-        (reset! decode-sm signature-state)
-        nil))
-    (decode-mavlink1 channel)))
+        (when @print-decoded (print (str "Decoded bytes: (" (.position input-buffer) ")")) (pprint (.array input-buffer)))
+        (if (= (.get input-buffer 0) MAVLINK2-START-BYTE)
+          (if (zero? (bit-and (.get input-buffer 2) IFLAG-SIGNED))
+            ; No signature, if accepting unsigned messages then decode and return the message
+            ; otherwise drop the message
+            (if @accept-unsigned-packets
+              (decode-mavlink2 channel nil)
+              (do
+                (swap! statistics assoc :dropped-unsigned (inc (:dropped-unsigned @statistics)))
+                nil))
+            ; The message is signed, go to signature-state to get signature
+            (do
+              (.put input-buffer ^byte a-byte)    ; put the MSB of the checksum
+              (reset! decode-sm signature-state)
+              nil))
+          (decode-mavlink1 channel)))
+      (do
+        ; FIXME this is for debug, this put is not needed
+        ;(.put input-buffer ^byte a-byte)    ; put the MSB of the checksum
+        ;(println (str "\nBad Checksum bytes: (" (.position input-buffer) ") crc-seed: " crc-seed )) (pprint (.array input-buffer))
+        (swap! statistics assoc :bad-checksums (inc (:bad-checksums @statistics)))
+        nil))))
 
 (defn checksum-lsb-state
   "Save the byte in the checksum-lsb, then go to checkbyte-msb-state."
@@ -763,115 +751,6 @@
   (swap! statistics assoc :bytes-received (inc (:bytes-received @statistics)))
   (when-let [message (@decode-sm channel a-byte)]
     message))
-
-(defn decode-byte-mavlink-no-sm
-  "Add a byte to the mavlink input buffer, and if we have a message check the
-   checksum. If the checksum matches decode the message, clear the buffer and
-   return the message.  If the checksum mis-matches, clear the buffer and
-   record the error in the statistics.
-   The MAVLink 1 message consists of the following 6 bytes:
-     Byte 0 MAVLINK1-START-BYTE
-     Byte 1 Payload size
-     Byte 2 Sequence id
-     Byte 3 System id
-     Byte 4 Component id
-     Byte 5 Message id"
-  [{:keys [mavlink ^ByteBuffer input-buffer statistics] :as channel} a-byte]
-  {:pre [input-buffer
-         (:messages-by-id mavlink)
-         (instance? Byte a-byte)]}
-  (swap! statistics assoc :bytes-received (inc (:bytes-received @statistics)))
-  (if (zero? (.position input-buffer))
-    (when (or (= a-byte MAVLINK1-START-BYTE)
-              (= a-byte MAVLINK2-START-BYTE))
-      (.put input-buffer ^byte a-byte)
-      nil)
-  ; else if this is MAVLink 1
-  (if (== (.get input-buffer 0) MAVLINK1-START-BYTE)
-    (do
-      (.put input-buffer ^byte a-byte)
-      (if (== (.position input-buffer) MAVLINK1-HDR-SIZE)
-        (let [{:keys [messages-by-id]} mavlink
-              payload-size (byte-to-long (.get input-buffer 1))
-              msg-id (byte-to-long (.get input-buffer 5))
-              message-map (get messages-by-id msg-id)]
-          (when (or (nil? message-map)
-                  (> payload-size (:payload-size message-map)))
-            (.clear input-buffer))
-          nil)
-        (let [payload-size (byte-to-long (.get input-buffer 1))]
-          ; when I have the header, payload and checksum, continue
-          (when (>= (.position input-buffer) (+ MAVLINK1-HDR-CRC-SIZE payload-size))
-            (let [{:keys [messages-by-id]} mavlink
-                  msg-id (byte-to-long (.get input-buffer 5))
-                  message-map (get messages-by-id msg-id)
-                  {:keys [decode-fns msg-key last-value crc-seed]} message-map
-                  checksum (let [lsb (.get input-buffer ^int (+ 6 payload-size))
-                                 msb (.get input-buffer ^int (+ 7 payload-size))]
-                             (bit-or (bit-and lsb 0xff)
-                                     (bit-and (bit-shift-left msb 8) 0xff00)))
-                  checksum-calc (compute-checksum input-buffer 1 (+ MAVLINK1-HDR-SIZE payload-size) crc-seed)
-                  ]
-              (.position input-buffer MAVLINK1-HDR-SIZE)
-              (if (== checksum checksum-calc)
-                (let [message (apply merge {:message-id msg-key
-                                            :sequence-id (byte-to-long (.get input-buffer 2))
-                                            :system-id (byte-to-long (.get input-buffer 3))
-                                            :component-id (byte-to-long (.get input-buffer 4))}
-                                           (map #(% input-buffer) decode-fns))]
-                  (.clear input-buffer)
-                  (swap! statistics assoc :messages-decoded (inc (:messages-decoded @statistics)))
-                  message)
-                (do
-                  (.clear input-buffer)
-                  (swap! statistics #(assoc % :bad-checksums (inc (:bad-checksums %))))
-                  nil)))))))
-  ; else if this is MAVLink 2
-  (if (== (.get input-buffer 0) MAVLINK2-START-BYTE)
-    (do
-      (.put input-buffer ^byte a-byte)
-      (if (== (.position input-buffer) MAVLINK2-HDR-SIZE)
-        (let [low-byte (byte-to-long (.get input-buffer 7))
-              middle-byte (byte-to-long (.get input-buffer 8))
-              high-byte (byte-to-long (.get input-buffer 9))
-              {:keys [messages-by-id]} mavlink
-              msg-id (+ (bit-and (bit-shift-left high-byte 16) 0xff0000)
-                        (bit-and (bit-shift-left middle-byte 8) 0xff00)
-                        (bit-and low-byte 0xff))
-              payload-size (byte-to-long (.get input-buffer 1))
-              message-map (get messages-by-id msg-id)]
-          (when (or (nil? message-map)
-                    (> payload-size (:payload-size message-map)))
-            (.clear input-buffer))
-          nil)
-        (let [payload-size (byte-to-long (.get input-buffer 1))]
-          ; when I have the header, payload and checksum, continue
-          (when (>= (.position input-buffer) (+ MAVLINK1-HDR-CRC-SIZE payload-size))
-            (let [{:keys [messages-by-id]} mavlink
-                  msg-id (byte-to-long (.get input-buffer 5))
-                  message-map (get messages-by-id msg-id)
-                  {:keys [decode-fns msg-key last-value crc-seed]} message-map
-                  checksum (let [lsb (.get input-buffer ^int (+ 6 payload-size))
-                                 msb (.get input-buffer ^int (+ 7 payload-size))]
-                             (bit-or (bit-and lsb 0xff)
-                                     (bit-and (bit-shift-left msb 8) 0xff00)))
-                  checksum-calc (compute-checksum input-buffer 1 (+ MAVLINK1-HDR-SIZE payload-size) crc-seed)
-                  ]
-              (.position input-buffer MAVLINK1-HDR-SIZE)
-              (if (== checksum checksum-calc)
-                (let [message (apply merge {:message-id msg-key
-                                            :sequence-id (byte-to-long (.get input-buffer 2))
-                                            :system-id (byte-to-long (.get input-buffer 3))
-                                            :component-id (byte-to-long (.get input-buffer 4))}
-                                           (map #(% input-buffer) decode-fns))]
-                  (.clear input-buffer)
-                  (swap! statistics assoc :messages-decoded (inc (:messages-decoded @statistics)))
-                  message)
-                (do
-                  (.clear input-buffer)
-                  (swap! statistics #(assoc % :bad-checksums (inc (:bad-checksums %))))
-                  nil)))))))
-      (.clear input-buffer)))))
 
 (defn decode-bytes
   "Decodes a MAVLink message from a byte array.

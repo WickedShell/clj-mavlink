@@ -460,7 +460,7 @@
                                                :component-id 88
                                                :link-id 15})
           secret-key (bytes (byte-array (map (comp byte int) "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456")))]
-      (update-channel new-channel :secret-key secret-key)
+      (update-channel new-channel :secret-key secret-key :accept-unsigned-packets false)
       (let [bs-empty (encode new-channel {:message-id :meminfo :sequence-id 1})
             bs-1 (encode new-channel {:message-id :meminfo :brkval 44})
             bs-2 (encode new-channel {:message-id :meminfo :freemem 33})
@@ -550,7 +550,7 @@
                (decode-bytes new-channel servo-2)))
         (is (thrown-with-msg? Exception #"timestamp error"
                (decode-bytes new-channel servo-2)))
-        (aset-byte servo-mangled 60 (byte 1))
+        (aset-byte servo-mangled 55 (byte 1))
         (is (thrown-with-msg? Exception #"sha256 error"
                (decode-bytes new-channel servo-mangled)))
         (is (thrown-with-msg? Exception #"timestamp error"
