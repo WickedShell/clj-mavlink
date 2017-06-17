@@ -190,9 +190,6 @@
    :component-id component-id
    :link-id (atom (or link-id 0)) ; MAVLink 2.0, encoding only
    :sequence-id-atom (atom 0)
-   :last-values (apply merge (map #(let [{:keys [msg-key default-msg]} %]
-                                     {msg-key (ref default-msg)})
-                                  (vals (:messages-by-keyword mavlink))))
    :decode-sm (atom start-state)
    :decode-message-info (atom nil)      ; internal to decode state machine
    :input-buffer                        ; internal to decoding
@@ -745,7 +742,7 @@
    Whenever an error occurs, go back to the start state. As soon as a start byte is recognized,
    start the state machine and attempt to decode a message.
    Both MAVlink 1.0 and MAVlink 2.0 are supported."
-  [{:keys [statistics decode-sm last-values] :as channel} a-byte]
+  [{:keys [statistics decode-sm] :as channel} a-byte]
   {:pre [(instance? Byte a-byte)
          (fn? @decode-sm)]}
   (swap! statistics assoc :bytes-received (inc (:bytes-received @statistics)))
