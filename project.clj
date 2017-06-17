@@ -13,4 +13,6 @@
                                       ]
                   }
             }
+  :plugins [[perforate "0.3.4"]]
+
   :global-vars {*warn-on-reflection* true})
