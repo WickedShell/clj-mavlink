@@ -1,6 +1,5 @@
 (ns mavlink.type
-  (:import [java.nio ByteBuffer])
-  (:gen-class))
+  (:import [java.nio ByteBuffer]))
 
 ;; type priority for placing fields in the MAVLINK packet. Equal priority
 ;; fields are placed in the order they are specified in the XML file.

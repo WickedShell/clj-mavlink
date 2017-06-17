@@ -6,8 +6,6 @@
             [com.MAVLink.common msg_heartbeat]
             [com.MAVLink.enums MAV_AUTOPILOT MAV_STATE MAV_TYPE]))
 
-(use 'clojure.pprint)
-
 (def mavlink-map
           (parse {:xml-sources [{:xml-file "ardupilotmega.xml"
                                  :xml-source (-> "test/resources/ardupilotmega.xml" io/input-stream)}

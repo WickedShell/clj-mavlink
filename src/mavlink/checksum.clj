@@ -1,6 +1,5 @@
 (ns mavlink.checksum
-  (:import [java.nio ByteBuffer])
-  (:gen-class))
+  (:import [java.nio ByteBuffer]))
 
 (def ^:const CRC-START-VALUE 0xffff)
 

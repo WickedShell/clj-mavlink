@@ -6,10 +6,7 @@
             [clojure.string :as string]
             [mavlink.checksum :refer :all]
             [mavlink.type :refer :all])
-  (:import [clojure.data.xml Element])
-  (:gen-class))
-
-(use 'clojure.pprint)
+  (:import [clojure.data.xml Element]))
 
 (def ^:const MAVLINK-VERSION 2)  ; FIXME
 
