@@ -321,7 +321,7 @@
                                      {:cause :missing-xml-include})))))))]
     (let [sources-with-zippers
             (mapv #(let [{:keys [xml-file xml-source]} %
-                         zipper (-> (:xml-source %) xml/parse zip/xml-zip)
+                         zipper (-> xml-source xml/parse zip/xml-zip)
                          file-name (or (zip-xml/xml1-> zipper :mavlink (zip-xml/attr :file))
                                        xml-file)]
                      (when-not file-name
