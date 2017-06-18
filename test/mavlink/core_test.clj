@@ -24,7 +24,7 @@
       :char     (char (+ (byte \A) i))
       :int8_t   (bit-and 0xff (+ 5 i))
       :uint8_t  (bit-and 0xff (+ 5 i))
-      :uint8_t_mavlink_version  2
+      :uint8_t_mavlink_version  3
       :int16_t  (bit-and 0xffff (+ 17235 (* i 52)))
       :uint16_t (bit-and 0xffff (+ 17235 (* i 52)))
       :int32_t  (bit-and 0xffffffff (+ 963497464 (* i 52)))

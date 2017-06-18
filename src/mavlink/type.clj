@@ -64,7 +64,8 @@
     :char     (fn [^ByteBuffer wrtr value] (.put wrtr (byte value)))
     :int8_t   (fn [^ByteBuffer wrtr value] (.put wrtr (byte value)))
     :uint8_t  (fn [^ByteBuffer wrtr value] (.put wrtr (.byteValue (new Long (long value)))))
-    :uint8_t_mavlink_version  (fn [^ByteBuffer wrtr value] (.put wrtr (.byteValue (new Long (long value)))))
+    ; FIXME: this seems like a dirty hack forr providing the version, find a better way
+    :uint8_t_mavlink_version  (fn [^ByteBuffer wrtr value] (.put wrtr (.byteValue (new Long 3))))
     :int16_t  (fn [^ByteBuffer wrtr value] (.putShort wrtr (short value)))
     :uint16_t (fn [^ByteBuffer wrtr value] (.putShort wrtr (.shortValue (new Long (long value)))))
     :int32_t  (fn [^ByteBuffer wrtr value] (.putInt wrtr (int value)))
@@ -73,28 +74,6 @@
     :double   (fn [^ByteBuffer wrtr value] (.putDouble wrtr (double value)))
     :int64_t  (fn [^ByteBuffer wrtr value] (.putLong wrtr (long value)))
     :uint64_t (fn [^ByteBuffer wrtr value] (.putLong wrtr (.longValue (bigint value))))))
-
-(defn get-default-value-fn
-  "Given a type, return the default value for that type cast to the correct type.
-   Note that if it is an unknown type, a simple 0 is returned."
-  [type-key mavlink-version]
-  (condp = type-key
-    :char     \o000
-    :int8_t   (byte 0)
-    :uint8_t  (byte 0)
-    :uint8_t_mavlink_version  (byte mavlink-version)
-    :int16_t  (short 0)
-    :uint16_t (short 0)
-    :int32_t  (int 0)
-    :uint32_t (int 0)
-    :float    (float 0)
-    :double   (double 0)
-    :int64_t  (long 0)
-    :uint64_t (long 0)
-    (throw (ex-info "Unknown default value type"
-                     {:cause :unknown-type
-                      :type type-key}))))
-(def get-default-value (memoize get-default-value-fn))
 
 (defn get-default-array
   "Given a type, return the default value for that type cast to the correct type.

@@ -8,8 +8,6 @@
             [mavlink.type :refer :all])
   (:import [clojure.data.xml Element]))
 
-(def ^:const MAVLINK-VERSION 2)  ; FIXME
-
 (def ^:const MAX-MESSAGE-SIZE 300)  ; the maximum message size
 
 (defn- keywordize
@@ -128,7 +126,7 @@
             (doseq [fval value]
               (write-fn payload fval))
             (dotimes [i num-missing]
-              (write-fn payload (get-default-value type-key MAVLINK-VERSION)))))
+              (write-fn payload 0))))
         (fn encode-it [payload message]
           (write-fn payload (name-key message))))
      (throw (ex-info (str "No function to write " type-key)
@@ -223,7 +221,7 @@
                                     (map #(let [{:keys [name-key type-key length]} %]
                                             (if length
                                               { name-key (get-default-array type-key length) }
-                                              { name-key (get-default-value type-key MAVLINK-VERSION) }))
+                                              { name-key 0}))
                                          (concat fields ext-fields)))
                       encode-fns (mapv gen-encode-fn fields)
                       decode-fns (mapv #(gen-decode-fn % enums-by-group) fields)
