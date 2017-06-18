@@ -165,21 +165,22 @@
 
 (defn get-mavlink
   "Return a mavlink map for one xml source."
-  [{:keys [system-id component-id descriptions] :as options} ^String file-name zipper]
- (let [enum-to-value
-        (with-local-vars [last-value 0]
-          (apply merge (zip-xml/xml-> zipper :mavlink :enums :enum :entry
-                                      (fn[e]
-                                        (let [enum-name  (zip-xml/attr e :name)
-                                              value (get-value (str "In " file-name " " enum-name " value")
-                                                       (zip-xml/attr e :value))]
-                                          { (keywordize enum-name)
-                                            (if value
-                                              (var-set last-value value)
-                                              (var-set last-value (inc @last-value)))})))))
+  [{:keys [^String file-name zipper] :as source} {:keys [descriptions] :as options}]
+  (let [enum-to-value (with-local-vars [last-value 0]
+                        ; FIXME: This produces incorrect values for all enums after the first that didn't have a defined value
+                        ;        also incorrectly handles an index in the middle of a list being dropped
+                        (apply merge (zip-xml/xml-> zipper :mavlink :enums :enum :entry
+                                                    (fn[e]
+                                                      (let [enum-name  (zip-xml/attr e :name)
+                                                            value (get-value (str "In " file-name " " enum-name " value")
+                                                                             (zip-xml/attr e :value))]
+                                                        {(keywordize enum-name)
+                                                           (if value
+                                                             (var-set last-value value)
+                                                             (var-set last-value (inc @last-value)))})))))
        enums-by-group
         (apply merge (zip-xml/xml-> zipper :mavlink :enums :enum
-                      (fn[e] 
+                      (fn [e] 
                         { (keywordize (zip-xml/attr e :name))
                               (apply merge
                                      (zip-xml/xml-> e :entry
@@ -271,31 +272,30 @@
     :enums-by-group enums-by-group
     :messages-by-keyword messages-by-keyword
     :messages-by-id (apply merge (map #(hash-map (:msg-id %) %)
-                                    (vals messages-by-keyword)))}))
+                                    (vals messages-by-keyword)))
+    :source file-name}))
 
 (defn add-mavlink
-  "Given two mavlink maps, merge the contents of the second with the first.
-   new-file is the name of the file used for errors."
+  "Given two mavlink maps, merge the contents of the second with the first."
   [{:keys [descriptions enum-to-value enums-by-group
-           messages-by-keyword messages-by-id] :as mavlink}
-   new-part new-file]
+           messages-by-keyword messages-by-id source]} new-part]
   (let [conflicts (filterv #(% enum-to-value) (keys (:enum-to-value new-part)))]
     (when-not (empty? conflicts)
-      (throw (ex-info (str "Adding " new-file
+      (throw (ex-info (str "Adding " source
                            " there are conflicts with the following enums"
                            conflicts
                            ". The new values will override the existing values.")
                       {:cause :enum-conflicts}))))
   (let [conflicts (filterv #(get messages-by-id %) (keys (:messages-by-id new-part)))]
     (when-not (empty? conflicts)
-      (throw (ex-info (str "Adding " new-file
+      (throw (ex-info (str "Adding " source
                            " there are conflicts with the following message ids:"
                            conflicts
                            ". The new values will override the existing values.")
                       {:cause :message-id-conflicts}))))
   (let [conflicts (filterv #(% messages-by-keyword) (keys (:messages-by-keyword new-part)))]
     (when-not (empty? conflicts)
-      (throw (ex-info (str "Adding " new-file
+      (throw (ex-info (str "Adding " source
                            " there are conflicts with the following message names:"
                            conflicts
                            ". The new values will override the existing values.")
@@ -327,10 +327,10 @@
                      (when-not file-name
                        (throw (ex-info (str "no file= attribute in XML and no :xml-file in " xml-source)
                                        {:cause :missing-xml-file-id})))
-                     (assoc % :xml-zipper zipper
-                              :xml-file file-name))
+                     (assoc % :zipper zipper
+                              :file-name file-name))
                   xml-sources)]
-      (doseq [{:keys [xml-zipper]} sources-with-zippers]
-        (verify-includes xml-zipper))
+      (doseq [{:keys [zipper]} sources-with-zippers]
+        (verify-includes zipper))
       sources-with-zippers)))
 

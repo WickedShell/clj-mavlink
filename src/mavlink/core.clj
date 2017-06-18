@@ -10,7 +10,7 @@
 (def print-encoded (atom false))
 (def print-decoded (atom false))
 
-(defonce IFLAG-SIGNED 0x01)
+(defonce INCOMPAT-FLAG-SIGNED 0x01)
 
 (def ^:const MAVLINK1-START-VALUE 254)
 (defonce MAVLINK1-START-BYTE (.byteValue (new Long MAVLINK1-START-VALUE)))
@@ -65,23 +65,11 @@
     :undefined-enum         - A message value uses an unidentified enumerated value
     :bad-checksum           - obviously a bad checksum
   "
-  [{:keys [descriptions xml-sources] :as info}]
-  {:pre [(pos? (count xml-sources))
-         ]}
-   (when-let [parsed (get-xml-zippers xml-sources)]
-     (let [options {:descriptions descriptions}]
-       (loop [source (first parsed)
-              rest-parsed (rest parsed)
-              mavlink {}]
-         (if (nil? source)
-           mavlink
-           (let [mavlink-part (get-mavlink options
-                                           (:xml-file source) (:xml-zipper source))]
-             (recur (first rest-parsed)
-                    (rest rest-parsed)
-                    (if (empty? mavlink)
-                      mavlink-part
-                      (add-mavlink mavlink mavlink-part (:xml-file source))))))))))
+  [{:keys [descriptions xml-sources] :as options}]
+  {:pre [(pos? (count xml-sources))]}
+   (let [parsed (get-xml-zippers xml-sources)]
+     (reduce (fn [mavlink source]
+                 (add-mavlink mavlink (get-mavlink source options))) {} parsed)))
 
 (defn update-channel
   "Update the MAVLink channel.
@@ -119,14 +107,8 @@
           (throw (ex-info "Bad secret key"
                           {:cause :bad-secret-key
                            :value v})))
-      :accept-unsigned-packets
-        (if (or (true? v)
-                (false? v))
-          (reset! accept-unsigned-packets v)
-          (throw (ex-info "Bad accept-unsigned-packets"
-                          {:cause :bad-accept-unsigned-packets
-                           :value v})))
-      (throw (ex-info "Unknown MAVLink 2 channel key"
+      :accept-unsigned-packets (reset! accept-unsigned-packets v)
+      (throw (ex-info "Unknown channel key"
                       {:cause :unknown-channel-key
                        :key k
                        :value v})))
@@ -577,7 +559,7 @@
       (do
         (when @print-decoded (print (str "Decoded bytes: (" (.position input-buffer) ")")) (pprint (.array input-buffer)))
         (if (= (.get input-buffer 0) MAVLINK2-START-BYTE)
-          (if (zero? (bit-and (.get input-buffer 2) IFLAG-SIGNED))
+          (if (zero? (bit-and (.get input-buffer 2) INCOMPAT-FLAG-SIGNED))
             ; No signature, if accepting unsigned messages then decode and return the message
             ; otherwise drop the message
             (if @accept-unsigned-packets
