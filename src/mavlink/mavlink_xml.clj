@@ -10,15 +10,12 @@
 
 (def ^:const MAX-MESSAGE-SIZE 300)  ; the maximum message size
 
-(defn- keywordize
+(defmacro keywordize
   "Take a string, replace all _ with - and put it in lower case,
    then convert to a keyword and return it.
    Not intended for use on type-names"
-  [^String s]
-  (if s
-    (keyword (string/lower-case (string/replace s \_ \-)))
-    (throw (ex-info "keywordize: null pointer"
-                    {:cause :null-pointer}))))
+  [s]
+  `(keyword (string/lower-case (string/replace ^String ~s \_ \-))))
 
 (defn- get-value
   "Take a string, if it is nil, return it, otherwise convert the string to a long
@@ -283,21 +280,24 @@
                            " there are conflicts with the following enums"
                            conflicts
                            ". The new values will override the existing values.")
-                      {:cause :enum-conflicts}))))
+                      {:cause :enum-conflicts
+                       :conflicts conflicts}))))
   (let [conflicts (filterv #(get messages-by-id %) (keys (:messages-by-id new-part)))]
     (when-not (empty? conflicts)
       (throw (ex-info (str "Adding " source
                            " there are conflicts with the following message ids:"
                            conflicts
                            ". The new values will override the existing values.")
-                      {:cause :message-id-conflicts}))))
+                      {:cause :message-id-conflicts
+                       :conflicts conflicts}))))
   (let [conflicts (filterv #(% messages-by-keyword) (keys (:messages-by-keyword new-part)))]
     (when-not (empty? conflicts)
       (throw (ex-info (str "Adding " source
                            " there are conflicts with the following message names:"
                            conflicts
                            ". The new values will override the existing values.")
-                      {:cause :message-name-conflicts}))))
+                      {:cause :message-name-conflicts
+                       :conflicts conflicts}))))
   {:descriptions (merge descriptions (:descriptions new-part))
    :enum-to-value (merge enum-to-value (:enum-to-value new-part))
    :enums-by-group (merge enums-by-group (:enums-by-group new-part))
