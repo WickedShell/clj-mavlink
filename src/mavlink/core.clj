@@ -719,29 +719,6 @@
          (recur (inc idx)
                 messages))))))
 
-(defn get-ref
-  "Return the Ref for a message. If the message-key is a keyword it is looked
-   up from the messages-by-keyword. Otherwise it is assumed to be a number and
-   is used to find the ref in the messages-by-id."
-  [{:keys [messages-by-keyword messages-by-id] :as mavlink} message-key]
-  {:pre [messages-by-keyword
-         messages-by-id
-         ]}
-  (if (keyword? message-key)
-    (:last-value (message-key messages-by-keyword))
-    (:last-value (get messages-by-id message-key))))
-
-(defn get-last-message
-  "Return the last value map of the message received.
-   message-key should be a keyword or the id value of a message."
-  [{:keys [messages-by-keyword messages-by-id] :as mavlink} message-key]
-  {:pre [messages-by-keyword
-         messages-by-id
-         ]}
-  (if (keyword? message-key)
-    @(:last-value (message-key messages-by-keyword))
-    @(:last-value (get messages-by-id message-key))))
-
 (defn get-description
   "Return the description, only useful if descriptions were saved.
    Otherwise nil is returned."
