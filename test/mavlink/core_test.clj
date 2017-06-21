@@ -56,7 +56,7 @@
        (.update-checksum crc
                          (if (.isArray (class the-bytes))
                            (aget ^bytes the-bytes idx)
-                           (.get ^java.nio.ByteBuffer the-bytes idx))))
+                           (.get ^java.nio.ByteBuffer the-bytes (int idx)))))
      (when crc-seed
        (.update-checksum crc crc-seed))
      (.crcValue crc))))
