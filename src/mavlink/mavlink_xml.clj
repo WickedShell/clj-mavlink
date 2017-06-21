@@ -110,6 +110,17 @@
                     (< priority1 priority2))
                fields))))
 
+(defmacro translate-keyword
+  "Translates a keyword to the appropriate enum value if needed"
+  [mavlink value]
+  `(if (keyword? ~value)
+     (if-let [enum-val# (~value (:enum-to-value ~mavlink))]
+       enum-val#
+       (throw (ex-info "Unable to translate enum before encoding"
+                       {:cause :undefined-enum
+                        :enum ~value})))
+     ~value))
+
 (defn gen-encode-fn
   "Generate the encode function for a field. Because they have the same structure
    this function works on both regular fields and extension fields."
@@ -121,20 +132,11 @@
           (let [value (name-key message)
                 num-missing (- length (count value))]
             (doseq [fval value]
-              (write-fn payload fval))
+              (write-fn payload (translate-keyword mavlink fval)))
             (dotimes [i num-missing]
               (write-fn payload 0))))
         (fn encode-it [mavlink payload message]
-          (write-fn payload (let [value (get message name-key 0)]
-                              (if (keyword? value)
-                                (if-let [enum-val (value (:enum-to-value mavlink))]
-                                  enum-val
-                                  (throw (ex-info "Unable to translate enum before encoding"
-                                                  {:cause :undefined-enum
-                                                   :enum value
-                                                   :field-name name-key
-                                                   :message message})))
-                                  value)))))
+          (write-fn payload (translate-keyword mavlink (get message name-key 0)))))
      (throw (ex-info (str "No function to write " type-key)
                      {:cause :no-write-fn})))))
 
