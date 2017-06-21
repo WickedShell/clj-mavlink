@@ -695,8 +695,7 @@
   {:pre [(instance? Byte a-byte)
          (fn? @decode-sm)]}
   (swap! statistics assoc :bytes-received (inc (:bytes-received @statistics)))
-  (when-let [message (@decode-sm channel a-byte)]
-    message))
+  (@decode-sm channel a-byte))
 
 (defn decode-bytes
   "Decodes a MAVLink message from a byte array.
