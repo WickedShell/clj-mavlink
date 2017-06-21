@@ -117,15 +117,24 @@
   (let [write-fn (type-key write-payload)]
     (if write-fn
       (if length
-        (fn encode-it-array [payload message]
+        (fn encode-it-array [mavlink payload message]
           (let [value (name-key message)
                 num-missing (- length (count value))]
             (doseq [fval value]
               (write-fn payload fval))
             (dotimes [i num-missing]
               (write-fn payload 0))))
-        (fn encode-it [payload message]
-          (write-fn payload (name-key message))))
+        (fn encode-it [mavlink payload message]
+          (write-fn payload (let [value (get message name-key 0)]
+                              (if (keyword? value)
+                                (if-let [enum-val (value (:enum-to-value mavlink))]
+                                  enum-val
+                                  (throw (ex-info "Unable to translate enum before encoding"
+                                                  {:cause :undefined-enum
+                                                   :enum value
+                                                   :field-name name-key
+                                                   :message message})))
+                                  value)))))
      (throw (ex-info (str "No function to write " type-key)
                      {:cause :no-write-fn})))))
 
@@ -213,13 +222,6 @@
                               checksum (compute-checksum msg-seed)]
                           (bit-xor (bit-and checksum 0xFF)
                                    (bit-and (bit-shift-right checksum 8) 0xff)))
-                      default-msg (apply
-                                    merge
-                                    (map #(let [{:keys [name-key type-key length]} %]
-                                            (if length
-                                              { name-key (get-default-array type-key length) }
-                                              { name-key 0}))
-                                         (concat fields ext-fields)))
                       encode-fns (mapv gen-encode-fn fields)
                       decode-fns (mapv #(gen-decode-fn % enums-by-group) fields)
                       ext-encode-fns (mapv gen-encode-fn ext-fields)
@@ -227,8 +229,6 @@
                       ]
                   { (keywordize msg-name)
                     {:msg-id msg-id
-                     :default-msg default-msg
-                     :last-value (ref default-msg)
                      :msg-key (keywordize msg-name)
                      :payload-size payload-size
                      :extension-payload-size (+ payload-size payload-size-ext)

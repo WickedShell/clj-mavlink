@@ -207,9 +207,7 @@
                                    {:xml-file "test-parse.xml"
                                     :xml-source (-> "test/resources/test-parse.xml" io/input-stream)}]
                      :descriptions true})))
-      (is (thrown-with-msg? Exception #"Unknown message fields"
-                   (encode channel-simple {:message-id :heartbeat :dummy-field 0})))
-      (is (thrown-with-msg? Exception #"Undefined enum"
+      (is (thrown-with-msg? Exception #"Unable to translate enum"
                    (encode channel-simple {:message-id :heartbeat :type :dummy-enum})))
       (is (= (:enum-to-value (:mavlink channel-simple))
              {:mav-autopilot-generic 0
@@ -347,9 +345,7 @@
       (is (= (:component-id (first three-part-message)) 1))
       (is (= (str (:omegaIy (first three-part-message))) (str -0.002494707)))
       (is (= (:system-id (first three-part-message)) 1))
-      (is (thrown-with-msg? Exception #"Unknown message fields"
-          (encode channel-complex {:message-id :gps-status :satellite_prn_BAD [1 2 3 4 5]})))
-      (is (thrown-with-msg? Exception #"Undefined enum"
+      (is (thrown-with-msg? Exception #"Unable to translate enum"
           (encode channel-complex {:message-id :heartbeat :type :not-an-enum})))
       (is (= (:satellite_prn (first (decode-bytes channel-complex (encode channel-complex {:message-id :gps-status :satellite_prn [1 2 3 4 5]}))))
              [1 2 3 4 5 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]))

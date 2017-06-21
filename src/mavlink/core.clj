@@ -61,7 +61,6 @@
     :message-name-conflicts - there is a conflict witht he message names in an XML file
     :missing-xml-include    - an XML file is included, but no source was identified for this file
     :missing-xml-file-id    - an XML source is missing an XML file indicator
-    :encode-bad-keys        - An encode message has bad message field keys
     :undefined-enum         - A message value uses an unidentified enumerated value
     :bad-checksum           - obviously a bad checksum
   "
@@ -201,30 +200,14 @@
          (instance? clojure.lang.Atom sequence-id-atom)
          (instance? clojure.lang.Atom statistics)
          ]}
-  (let [{:keys [messages-by-keyword enum-to-value]} mavlink
+  (let [{:keys [messages-by-keyword]} mavlink
         {:keys [encode-fns ^long payload-size crc-seed
-                default-msg ^long msg-id msg-key]} (message-id messages-by-keyword)
+                ^long msg-id msg-key]} (message-id messages-by-keyword)
         ^long sys-id (or (:system-id message-map) system-id)
         ^long comp-id (or (:component-id message-map) component-id)
         ^long seq-id (if-let [seq-id- (:sequence-id message-map)]
                        (reset! sequence-id-atom (mod seq-id- 256))
                        (swap! sequence-id-atom #(mod (inc %) 256)))
-        merged-message (merge default-msg
-                              (dissoc message-map :message-id :system-id :component-id :sequence-id :link-id))
-        bad-keys (let [bad-keys (filterv (fn[k] (nil? (k default-msg))) (keys merged-message))]
-                   (when-not (empty? bad-keys)
-                     (throw (ex-info "Unknown message fields"
-                                     {:cause :encode-bad-keys
-                                      :fields bad-keys}))))
-        message (apply merge (map #(let [[current-key current-value] %]
-                                     (if (keyword? current-value)
-                                       (if-let [enum-val (current-value enum-to-value)]
-                                         { current-key enum-val }
-                                         (throw (ex-info "Undefined enum"
-                                                         {:cause :undefined-enum
-                                                          :enum current-value})))
-                                       { current-key current-value }))
-                                     merged-message))
         payload (let [byte-buffer (ByteBuffer/allocate payload-size)]
                   (.order byte-buffer ByteOrder/LITTLE_ENDIAN)
                   byte-buffer)
@@ -236,7 +219,7 @@
     (aset-byte packed 4 (.byteValue (new Long comp-id)))
     (aset-byte packed 5 (.byteValue (new Long msg-id)))
     (doseq [encode-fn encode-fns]
-      (encode-fn payload message))
+      (encode-fn mavlink payload message-map))
     ; now copy the array from the payload to the packed array.
     (System/arraycopy (.array payload) 0 packed MAVLINK1-HDR-SIZE (.position payload))
     ; finally calculate and put the checksum in, lsb first.
@@ -301,31 +284,15 @@
          (instance? clojure.lang.Atom secret-key)
          (instance? clojure.lang.Atom statistics)
          ]}
-  (let [{:keys [messages-by-keyword enum-to-value]} mavlink
+  (let [{:keys [messages-by-keyword]} mavlink
         {:keys [encode-fns extension-encode-fns ^long extension-payload-size
-                crc-seed default-msg ^long msg-id msg-key]} (message-id messages-by-keyword)
+                crc-seed ^long msg-id msg-key]} (message-id messages-by-keyword)
         ^long sys-id (or (:system-id message-map) system-id)
         ^long comp-id (or (:component-id message-map) component-id)
         ^long link-id (or (:link-id message-map) @link-id)
         ^long seq-id (if-let [seq-id- (:sequence-id message-map)]
                        (reset! sequence-id-atom (mod seq-id- 256))
                        (swap! sequence-id-atom #(mod (inc %) 256)))
-        merged-message (merge default-msg
-                              (dissoc message-map :message-id :system-id :component-id :sequence-id :link-id))
-        bad-keys (let [bad-keys (filterv (fn[k] (nil? (k default-msg))) (keys merged-message))]
-                   (when-not (empty? bad-keys)
-                     (throw (ex-info "Unknown message fields"
-                                     {:cause :encode-bad-keys
-                                      :fields bad-keys}))))
-        message (apply merge (map #(let [[current-key current-value] %]
-                                     (if (keyword? current-value)
-                                       (if-let [enum-val (current-value enum-to-value)]
-                                         { current-key enum-val }
-                                         (throw (ex-info "Undefined enum"
-                                                         {:cause :undefined-enum
-                                                          :enum current-value})))
-                                       { current-key current-value }))
-                                     merged-message))
         payload (let [byte-buffer (ByteBuffer/allocate extension-payload-size)]
                   (.order byte-buffer ByteOrder/LITTLE_ENDIAN)
                   byte-buffer)
@@ -335,7 +302,7 @@
         compat-flags 0]
     ; encode the payload
     (doseq [encode-fn (concat encode-fns extension-encode-fns)]
-      (encode-fn payload message))
+      (encode-fn mavlink payload message-map))
   
     ; trim the message and fix the payload size
     (while (and (pos? (.position payload))
