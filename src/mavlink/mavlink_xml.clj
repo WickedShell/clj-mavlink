@@ -172,18 +172,30 @@
 (defn get-mavlink
   "Return a mavlink map for one xml source."
   [{:keys [^String file-name zipper] :as source} {:keys [descriptions] :as options}]
-  (let [enum-to-value (with-local-vars [last-value 0]
-                        ; FIXME: This produces incorrect values for all enums after the first that didn't have a defined value
-                        ;        also incorrectly handles an index in the middle of a list being dropped
-                        (apply merge (zip-xml/xml-> zipper :mavlink :enums :enum :entry
-                                                    (fn[e]
-                                                      (let [enum-name  (zip-xml/attr e :name)
-                                                            value (get-value (str "In " file-name " " enum-name " value")
-                                                                             (zip-xml/attr e :value))]
-                                                        {(keywordize enum-name)
-                                                           (if value
-                                                             (var-set last-value value)
-                                                             (var-set last-value (inc @last-value)))})))))
+  (let [enum-to-value (reduce merge
+                              (zip-xml/xml-> zipper
+                                             :mavlink
+                                             :enums
+                                             :enum
+                                             (fn[enum-group]
+                                               ; returns a map of the enum entries for this group
+                                               (let [entries (zip-xml/xml-> enum-group :entry)]
+                                                 (loop [last-value -1
+                                                        entry (first entries)
+                                                        rest-entries (rest entries)
+                                                        values-map {}]
+                                                   (if (nil? entry)
+                                                     values-map
+                                                     (let [enum-name  (zip-xml/attr entry :name)
+                                                           value (get-value (str "In " file-name " " enum-name " value")
+                                                                            (zip-xml/attr entry :value))
+                                                           enum-value (long (if value value (inc last-value)))]
+                                                       (recur enum-value
+                                                              (first rest-entries)
+                                                              (rest rest-entries)
+                                                              (merge values-map
+                                                                     {(keywordize enum-name)
+                                                                      enum-value})))))))))
        enums-by-group
         (apply merge (zip-xml/xml-> zipper :mavlink :enums :enum
                       (fn [e] 

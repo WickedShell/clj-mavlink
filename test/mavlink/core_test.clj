@@ -210,22 +210,60 @@
       (is (thrown-with-msg? Exception #"Unable to translate enum"
                    (encode channel-simple {:message-id :heartbeat :type :dummy-enum})))
       (is (= (:enum-to-value (:mavlink channel-simple))
-             {:mav-autopilot-generic 0
-              :mav-autopilot-reserved 1
-              :mav-autopilot-slugs 2
-              :mav-type-generic 0
-              :mav-type-fixed-wing 1
-             })
+             {:mav-autopilot-generic 0,
+              :mav-autopilot-reserved 1,
+              :mav-autopilot-slugs 2,
+              :mav-cmd-ack-ok 0,
+              :mav-cmd-ack-err-fail 1,
+              :mav-cmd-ack-err-access-denied 2,
+              :mav-cmd-ack-err-not-supported 3,
+              :mav-cmd-ack-err-coordinate-frame-not-supported 4,
+              :mav-cmd-ack-err-coordinates-out-of-range 5,
+              :mav-cmd-ack-err-x-lat-out-of-range 6,
+              :mav-cmd-ack-err-y-lon-out-of-range 7,
+              :mav-cmd-ack-err-z-alt-out-of-range 8,
+              :mav-type-generic 0,
+              :mav-type-fixed-wing 1,
+              :mav-state-uninit 0,
+              :mav-state-boot 1,
+              :mav-state-calibrating 2,
+              :mav-state-standby 3,
+              :mav-state-active 4,
+              :mav-state-critical 5,
+              :mav-state-emergency 6,
+              :mav-state-poweroff 7
+              :mav-test-five 5,
+              :mav-test-six 6,
+              :mav-test-ten 10
+              :mav-test-eleven 11})
           "Enum-to-value test failed.")
       (is (= (:enums-by-group (:mavlink channel-simple))
-            {:mav-autopilot
-               {0 :mav-autopilot-generic
-                1 :mav-autopilot-reserved
-                2 :mav-autopilot-slugs}
-             :mav-type
-               {0 :mav-type-generic
-                1 :mav-type-fixed-wing}
-             })
+             {:mav-test {5 :mav-test-five,
+                         6 :mav-test-six,
+                         10 :mav-test-ten
+                         11 :mav-test-eleven}
+              :mav-autopilot {0 :mav-autopilot-generic,
+                              1 :mav-autopilot-reserved,
+                              2 :mav-autopilot-slugs},
+              :mav-cmd-ack {0 :mav-cmd-ack-ok,
+                            1 :mav-cmd-ack-err-fail,
+                            2 :mav-cmd-ack-err-access-denied,
+                            3 :mav-cmd-ack-err-not-supported,
+                            4 :mav-cmd-ack-err-coordinate-frame-not-supported,
+                            5 :mav-cmd-ack-err-coordinates-out-of-range,
+                            6 :mav-cmd-ack-err-x-lat-out-of-range,
+                            7 :mav-cmd-ack-err-y-lon-out-of-range,
+                            8 :mav-cmd-ack-err-z-alt-out-of-range},
+              :mav-type {0 :mav-type-generic,
+                         1 :mav-type-fixed-wing},
+              :mav-state {0 :mav-state-uninit,
+                          1 :mav-state-boot,
+                          2 :mav-state-calibrating,
+                          3 :mav-state-standby,
+                          4 :mav-state-active,
+                          5 :mav-state-critical,
+                          6 :mav-state-emergency,
+                          7 :mav-state-poweroff}})
           "Enum-by-group test failed")
       (is (= (get (:mav-autopilot (:enums-by-group (:mavlink channel-simple))) 1) :mav-autopilot-reserved)
           "Fetching of enum by its value from enums-by-group failed.")
