@@ -189,13 +189,13 @@
                                                      (let [enum-name  (zip-xml/attr entry :name)
                                                            value (get-value (str "In " file-name " " enum-name " value")
                                                                             (zip-xml/attr entry :value))
-                                                           enum-value (long (if value value (inc last-value)))]
+                                                           enum-value (long (or value (inc last-value)))]
                                                        (recur enum-value
                                                               (first rest-entries)
                                                               (rest rest-entries)
-                                                              (merge values-map
-                                                                     {(keywordize enum-name)
-                                                                      enum-value})))))))))
+                                                              (assoc values-map
+                                                                     (keywordize enum-name)
+                                                                     enum-value)))))))))
        enums-by-group
         (apply merge (zip-xml/xml-> zipper :mavlink :enums :enum
                       (fn [e] 
