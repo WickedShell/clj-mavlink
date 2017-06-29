@@ -183,9 +183,9 @@
                                                  (loop [last-value -1
                                                         entry (first entries)
                                                         rest-entries (rest entries)
-                                                        values-map {}]
+                                                        values-map (transient {})]
                                                    (if (nil? entry)
-                                                     values-map
+                                                     (persistent! values-map)
                                                      (let [enum-name  (zip-xml/attr entry :name)
                                                            value (get-value (str "In " file-name " " enum-name " value")
                                                                             (zip-xml/attr entry :value))
@@ -193,9 +193,9 @@
                                                        (recur enum-value
                                                               (first rest-entries)
                                                               (rest rest-entries)
-                                                              (assoc values-map
-                                                                     (keywordize enum-name)
-                                                                     enum-value)))))))))
+                                                              (assoc! values-map
+                                                                      (keywordize enum-name)
+                                                                      enum-value)))))))))
        enums-by-group
         (apply merge (zip-xml/xml-> zipper :mavlink :enums :enum
                       (fn [e] 
