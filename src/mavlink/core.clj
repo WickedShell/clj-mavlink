@@ -386,12 +386,12 @@
     (.position input-buffer MAVLINK1-HDR-SIZE)
     ; decode the message, restart the decode state machine, then
     ; save the message and return it!
-    (let [message (apply merge
-                         {:message-id msg-key
-                          :sequence-id (byte-to-long (new Long (.get input-buffer 2)))
-                          :system-id (byte-to-long (new Long (.get input-buffer 3)))
-                          :component-id (byte-to-long (new Long (.get input-buffer 4)))}
-                         (map #(% input-buffer) decode-fns))]
+    (let [message (persistent! (reduce (fn [message decode-fn] (decode-fn input-buffer message))
+                                       (transient {:message-id msg-key
+                                                   :sequence-id (byte-to-long (new Long (.get input-buffer 2)))
+                                                   :system-id (byte-to-long (new Long (.get input-buffer 3)))
+                                                   :component-id (byte-to-long (new Long (.get input-buffer 4)))})
+                                       decode-fns))]
       (swap! statistics assoc :messages-decoded (inc (:messages-decoded @statistics)))
       message)))
 
@@ -417,13 +417,13 @@
     (.position input-buffer MAVLINK2-HDR-SIZE)
     ; decode the message, restart the decode state machine, then
     ; save the message and return it!
-    (let [message (apply merge
-                         {:message-id msg-key
-                          :sequence-id (byte-to-long (new Long (.get input-buffer 4)))
-                          :system-id (byte-to-long (new Long (.get input-buffer 5)))
-                          :component-id (byte-to-long (new Long (.get input-buffer 6)))
-                          :link-id link-id}
-                         (map #(% input-buffer) (concat decode-fns extension-decode-fns)))]
+    (let [message (persistent! (reduce (fn [message decode-fn] (decode-fn input-buffer message))
+                                       (transient {:message-id msg-key
+                                                   :sequence-id (byte-to-long (new Long (.get input-buffer 4)))
+                                                   :system-id (byte-to-long (new Long (.get input-buffer 5)))
+                                                   :component-id (byte-to-long (new Long (.get input-buffer 6)))
+                                                   :link-id link-id})
+                                       (concat decode-fns extension-decode-fns)))]
       (swap! statistics assoc :messages-decoded (inc (:messages-decoded @statistics)))
       message)))
 

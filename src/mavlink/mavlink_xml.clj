@@ -44,12 +44,6 @@
     (when-let [length (re-find (re-matcher #"\d+" array-spec))]
       (get-value (str s " array type length") length))))
 
-(defn lookup-enum
- "Given an enum group, lookup enum for the value int his group, return either
-  the enum or the value if the enum could not be found."
-  [enums v]
-  (get enums v v))
-
 (defn get-fields
   "Returns just the fields of a message; or nil if there are none.
    While using extentions tag as a separator, this function looks to
@@ -152,22 +146,18 @@
                        :type-key type-key
                        :name-key name-key}))
       (if length
-        (fn decode-it-array [buffer]
+        (fn decode-it-array [buffer message]
           (let [new-array (reduce
                             (fn [vr i] (conj vr (let [v (read-fn buffer)]
-                                                  (if enum-type
-                                                    (lookup-enum enum-group v)
-                                                    v))))
+                                                    (get enum-group v v))))
                             []
                             (range length))]
-            { name-key (if (= type-key :char)
+            (assoc! message  name-key (if (= type-key :char)
                          (.trim (new String ^"[B" (into-array Byte/TYPE new-array)))
-                         new-array) }))
-        (fn decode-it [buffer]
-          { name-key (let [v (read-fn buffer)]
-                       (if enum-type
-                         (lookup-enum enum-group v)
-                         v)) } )))))
+                         new-array) )))
+        (fn decode-it [buffer message]
+          (assoc! message name-key (let [v (read-fn buffer)]
+                                     (get enum-group v v))))))))
 
 (defn get-mavlink
   "Return a mavlink map for one xml source."

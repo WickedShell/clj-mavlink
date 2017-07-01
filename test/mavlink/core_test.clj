@@ -3,8 +3,7 @@
             [clojure.java.io :as io]
             [mavlink.checksum :refer :all]
             [mavlink.core :refer :all]
-            [mavlink.type :refer :all]
-            [mavlink.mavlink-xml :refer [lookup-enum]])
+            [mavlink.type :refer :all])
   (:import [com.mavlink CRC]
            [java.nio ByteBuffer ByteOrder]))
 
@@ -93,8 +92,8 @@
          (apply merge (map #(let [{:keys [name-key type-key enum-type length]} %
                                   value (get-test-value type-key  5 length)]
                               {name-key (if enum-type
-                                          (lookup-enum (enum-type (:enums-by-group mavlink))
-                                                                           value)
+                                          (get (enum-type (:enums-by-group mavlink))
+                                               value value)
                                           value)})
                            fields))))
 
