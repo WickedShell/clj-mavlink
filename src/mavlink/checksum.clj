@@ -1,7 +1,7 @@
 (ns mavlink.checksum
   (:import [java.nio ByteBuffer]))
 
-(def ^:const CRC-START-VALUE 0xffff)
+(defonce ^:const  array-of-bytes-type (Class/forName "[B"))
 
 (defn update-crc
   "Add the next byte to the CRC abd return the result."
@@ -13,6 +13,20 @@
              (bit-shift-left tmp2 3)
              (bit-and (bit-shift-right tmp2 4) 0xf))))
 
+(defn- compute-checksum-bytes
+  [^bytes the-bytes start-idx last-idx crc-seed]
+  (reduce
+    (fn [crc idx]
+        (update-crc crc (aget the-bytes idx)))
+    0xffff (range start-idx last-idx)))
+
+(defn- compute-checksum-byte-buffer
+  [^ByteBuffer the-bytes start-idx last-idx crc-seed]
+  (reduce
+    (fn [crc idx]
+        (update-crc crc (.get the-bytes ^int idx)))
+    0xffff (range start-idx last-idx)))
+
 (defn compute-checksum
   "Compute the checksum of a string and return it or of
    of a array with an optional magic byte, or part of a byte
@@ -20,14 +34,9 @@
   ([^String s] (compute-checksum (ByteBuffer/wrap (.getBytes s)) 0 (count s) nil))
   ([the-bytes crc-seed] (compute-checksum the-bytes 0 (count the-bytes) crc-seed))
   ([the-bytes start-idx last-idx crc-seed]
-   (loop [idx start-idx
-          crc CRC-START-VALUE]
-     (if (>= idx last-idx)
-       (if crc-seed
-         (update-crc crc crc-seed)
-         crc)
-       (recur (inc idx)
-              (update-crc crc
-                          (if (= (Class/forName "[B") (class the-bytes))
-                            (aget ^bytes the-bytes idx)
-                            (.get ^ByteBuffer the-bytes ^int idx))))))))
+   (let [crc (if (= array-of-bytes-type (type the-bytes))
+               (compute-checksum-bytes the-bytes start-idx last-idx crc-seed)
+               (compute-checksum-byte-buffer the-bytes start-idx last-idx crc-seed))]
+     (if crc-seed
+       (update-crc crc crc-seed)
+       crc))))

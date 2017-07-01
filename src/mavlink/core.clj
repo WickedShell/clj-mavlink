@@ -6,10 +6,6 @@
            [java.security MessageDigest]
            [java.lang System]))
 
-(use 'clojure.pprint)  ;; FIXME delete this sucker after testing
-(def print-encoded (atom false))
-(def print-decoded (atom false))
-
 (defonce INCOMPAT-FLAG-SIGNED 0x01)
 
 (def ^:const MAVLINK1-START-VALUE 254)
@@ -25,8 +21,6 @@
 (def ^:const SIGN-PACKETS-FLAG 0x1)
 
 (def ^:const ONE-MINUTE 6000000)
-
-(def ZERO-BYTE (byte 0))
 
 (defn get-timestamp
  "Get current time timestamp."
@@ -364,7 +358,6 @@
                                  {:cause :bad-protocol
                                   :protocol @protocol})))]
     (when packed
-      (when @print-encoded (print "Encoded bytes: ") (pprint packed))
       (swap! statistics #(assoc % :messages-encoded (inc (:messages-encoded %)))))
     packed))
 
@@ -412,7 +405,7 @@
     ; replace trimmed bytes
     (when (> extension-payload-size msg-payload-size)
       (doseq [i (range (- extension-payload-size msg-payload-size))]
-        (.put input-buffer ^byte ZERO-BYTE)))
+        (.put input-buffer (byte 0))))
     ; position the buffer at the start of the payload
     (.position input-buffer MAVLINK2-HDR-SIZE)
     ; decode the message, restart the decode state machine, then
@@ -453,8 +446,8 @@
         timestamp (let [bb (ByteBuffer/allocate 8)]
                     (.order bb ByteOrder/LITTLE_ENDIAN)
                     (System/arraycopy packet (inc start-signature-idx) (.array bb) 0 6)
-                    (.put bb 6 ZERO-BYTE)
-                    (.put bb 7 ZERO-BYTE)
+                    (.put bb 6 0)
+                    (.put bb 7 0)
                     (.getLong bb))
         start-sha256-idx (+ start-signature-idx 7)]
     (.reset decode-sha256)
@@ -523,27 +516,22 @@
                          (bit-and (bit-shift-left a-byte 8) 0xff00))
         checksum-calc (compute-checksum input-buffer 1 last-idx crc-seed)]
     (if (== checksum checksum-calc)
-      (do
-        (when @print-decoded (print (str "Decoded bytes: (" (.position input-buffer) ")")) (pprint (.array input-buffer)))
-        (if (= (.get input-buffer 0) MAVLINK2-START-BYTE)
-          (if (zero? (bit-and (.get input-buffer 2) INCOMPAT-FLAG-SIGNED))
-            ; No signature, if accepting unsigned messages then decode and return the message
-            ; otherwise drop the message
-            (if @accept-unsigned-packets
-              (decode-mavlink2 channel nil)
-              (do
-                (swap! statistics assoc :dropped-unsigned (inc (:dropped-unsigned @statistics)))
-                nil))
-            ; The message is signed, go to signature-state to get signature
+      (if (= (.get input-buffer 0) MAVLINK2-START-BYTE)
+        (if (zero? (bit-and (.get input-buffer 2) INCOMPAT-FLAG-SIGNED))
+          ; No signature, if accepting unsigned messages then decode and return the message
+          ; otherwise drop the message
+          (if @accept-unsigned-packets
+            (decode-mavlink2 channel nil)
             (do
-              (.put input-buffer ^byte a-byte)    ; put the MSB of the checksum
-              (reset! decode-sm signature-state)
+              (swap! statistics assoc :dropped-unsigned (inc (:dropped-unsigned @statistics)))
               nil))
-          (decode-mavlink1 channel)))
+          ; The message is signed, go to signature-state to get signature
+          (do
+            (.put input-buffer ^byte a-byte)    ; put the MSB of the checksum
+            (reset! decode-sm signature-state)
+            nil))
+        (decode-mavlink1 channel))
       (do
-        ; FIXME this is for debug, this put is not needed
-        ;(.put input-buffer ^byte a-byte)    ; put the MSB of the checksum
-        ;(println (str "\nBad Checksum bytes: (" (.position input-buffer) ") crc-seed: " crc-seed )) (pprint (.array input-buffer))
         (swap! statistics assoc :bad-checksums (inc (:bad-checksums @statistics)))
         nil))))
 
@@ -700,24 +688,17 @@
 (defn decode-bytes
   "Decodes a MAVLink message from a byte array.
    This function can be called with either a byte array or a single byte.
-   Nil is returned if no messages could be decoded. If a byte completes a message
-   then the message-map is returned. If a byte array completes one or more messages,
-   then those messages are returned in a vector, otherwise nil is treturned."
+   A vector is returned that contains all the messages which were succesfully decoded."
   ([channel ^bytes some-bytes]
    {:pre [(= (Class/forName "[B") (class some-bytes))]}
    (decode-bytes channel some-bytes (alength some-bytes)))
   ([channel ^bytes some-bytes num-bytes]
    {:pre [(= (Class/forName "[B") (class some-bytes))]}
-   (loop [idx 0
-          messages []]
-     (if (>= idx num-bytes)
-       (when-not (empty? messages)
-         messages)
-       (if-let [message (decode-byte channel (aget some-bytes idx))]
-         (recur (inc idx)
-                (conj messages message))
-         (recur (inc idx)
-                messages))))))
+   (persistent! (reduce (fn [messages idx] 
+               (if-let [message (decode-byte channel (aget some-bytes idx))]
+                 (conj! messages message)
+                 messages))
+          (transient []) (range num-bytes)))))
 
 (defn get-description
   "Return the description, only useful if descriptions were saved.

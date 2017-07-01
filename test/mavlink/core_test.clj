@@ -320,12 +320,12 @@
           ; the following tests two header decoding errors, the first is that the message id is wrong,
           ; then there is another spurious start byte if the following message decodes, which it should then
           ; we're good.
-          bad-message (is (nil? (decode-bytes channel-complex (mkbytes "fe 49 e0 1 1 03 0 0 0 fe 93 2 63 0 49 4e 49 54 49 41 4c 5f 4d 4f 44 45 0 0 0 0 2 bb 4c")))
+          bad-message (is (empty? (decode-bytes channel-complex (mkbytes "fe 49 e0 1 1 03 0 0 0 fe 93 2 63 0 49 4e 49 54 49 41 4c 5f 4d 4f 44 45 0 0 0 0 2 bb 4c")))
                           "Bad message id, entire message should be eaten.")
           multi-message (decode-bytes channel-complex (mkbytes "fe 19 e0 1 1 16 0 0 0 0 93 2 63 0 49 4e 49 54 49 41 4c 5f 4d 4f 44 45 0 0 0 0 2 bb 4c fe 19 e1 1 1 16 0 c0 5a 45 93 2 64 0 4c 49 4d 5f 52 4f 4c 4c 5f 43 44 0 0 0 0 0 4 79 73 fe 1c e2 1 1 a3 43 50 ba b9 3d 7e 23 bb 35 2d e2 3a 0 0 0 0 0 0 0 0 e0 51 ce 3a 70 6e 2 3b 9c 21"))
           three-part-message (do
-                               (is (nil? (decode-bytes channel-complex (mkbytes "fe 1c e2 1 1 a3 43 50 ba b9"))))
-                               (is (nil? (decode-bytes channel-complex (mkbytes "3d 7e 23 bb 35 2d e2 3a 0 0 0"))))
+                               (is (empty? (decode-bytes channel-complex (mkbytes "fe 1c e2 1 1 a3 43 50 ba b9"))))
+                               (is (empty? (decode-bytes channel-complex (mkbytes "3d 7e 23 bb 35 2d e2 3a 0 0 0"))))
                                (decode-bytes channel-complex (mkbytes "0 0 0 0 0 e0 51 ce 3a 70 6e 2 3b 9c 21 fe 9 7 ff be")))
           partial-message (decode-bytes channel-complex (mkbytes "0 0 0 0 0 6 8 0 0 0 c7 18"))
           ]
