@@ -690,10 +690,10 @@
    This function can be called with either a byte array or a single byte.
    A vector is returned that contains all the messages which were succesfully decoded."
   ([channel ^bytes some-bytes]
-   {:pre [(= (Class/forName "[B") (class some-bytes))]}
+   {:pre [(= array-of-bytes-type (type some-bytes))]}
    (decode-bytes channel some-bytes (alength some-bytes)))
   ([channel ^bytes some-bytes num-bytes]
-   {:pre [(= (Class/forName "[B") (class some-bytes))]}
+   {:pre [(= array-of-bytes-type (type some-bytes))]}
    (persistent! (reduce (fn [messages idx] 
                (if-let [message (decode-byte channel (aget some-bytes idx))]
                  (conj! messages message)
