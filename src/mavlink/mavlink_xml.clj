@@ -147,8 +147,8 @@
                             []
                             (range length))]
             (assoc! message  name-key (if (= type-key :char)
-                         (.trim (new String ^"[B" (into-array Byte/TYPE new-array)))
-                         new-array) )))
+                                        (.trim (new String ^"[B" (into-array Byte/TYPE new-array)))
+                                        new-array))))
         (fn decode-it [buffer message]
           (assoc! message name-key (let [v (read-fn buffer)]
                                      (get enum-group v v))))))))
@@ -190,12 +190,11 @@
        enums-by-group
         (apply merge (zip-xml/xml-> zipper :mavlink :enums :enum
                       (fn [e] 
-                        { (keywordize (zip-xml/attr e :name))
-                              (apply merge
-                                     (zip-xml/xml-> e :entry
-                                       #(let [enum-key (keywordize (zip-xml/attr % :name))]
-                                          {(enum-key enum-to-value) enum-key})))
-                             } )))
+                        {(keywordize (zip-xml/attr e :name))
+                         (apply merge
+                                (zip-xml/xml-> e :entry
+                                               #(let [enum-key (keywordize (zip-xml/attr % :name))]
+                                                  {(enum-key enum-to-value) enum-key})))})))
        messages-by-keyword
           (apply
             merge
@@ -225,7 +224,7 @@
                                                    (map #(let [{:keys [fld-name type-key length]} %]
                                                            (str (if (= type-key :uint8_t_mavlink_version)
                                                                   "uint8_t"
-                                                                  (name type-key))  " "
+                                                                  (name type-key)) " "
                                                                 fld-name " "
                                                                 (when length
                                                                   (char length))))
@@ -238,22 +237,22 @@
                       ext-encode-fns (mapv gen-encode-fn ext-fields)
                       ext-decode-fns (mapv #(gen-decode-fn % enums-by-group) ext-fields)
                       ]
-                  { (keywordize msg-name)
-                    {:msg-id msg-id
-                     :msg-key (keywordize msg-name)
-                     :payload-size payload-size
-                     :extension-payload-size (+ payload-size payload-size-ext)
-                     :fields fields
-                     :encode-fns encode-fns
-                     :decode-fns decode-fns
-                     :extension-fields ext-fields
-                     :extension-encode-fns ext-encode-fns
-                     :extension-decode-fns ext-decode-fns
-                     :crc-seed crc-seed
+                  {(keywordize msg-name)
+                   {:msg-id msg-id
+                    :msg-key (keywordize msg-name)
+                    :payload-size payload-size
+                    :extension-payload-size (+ payload-size payload-size-ext)
+                    :fields fields
+                    :encode-fns encode-fns
+                    :decode-fns decode-fns
+                    :extension-fields ext-fields
+                    :extension-encode-fns ext-encode-fns
+                    :extension-decode-fns ext-decode-fns
+                    :crc-seed crc-seed
                     }
                   }))))
        all-descriptions
-         (if descriptions
+         (when descriptions
            (apply
              merge
              (concat
@@ -271,8 +270,7 @@
                             (fn[m]
                               { (keywordize (zip-xml/attr m :name))
                                 (zip-xml/xml1-> m :description zip-xml/text)
-                              }))))
-           nil)]
+                              })))))]
    {:descriptions all-descriptions
     :enum-to-value enum-to-value
     :enums-by-group enums-by-group
