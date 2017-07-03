@@ -47,28 +47,24 @@
   (if-let [node (zip-xml/xml1-> m :extensions)]
     (remove nil? 
             (mapv #(when (= (:tag %) :field)
-                     (let [fld-name (-> % :attrs :name)
-                           type-name (-> % :attrs :type)
-                           enum-name (-> % :attrs :enum)]
-                       {:fld-name fld-name
-                        :name-key (keyword fld-name)
-                        :type-key (get-type type-name)
-                        :enum-type (when enum-name
-                                     (keywordize enum-name))
-                        :length (get-array-length type-name) }))
+                     (let [{:keys [enum name type]} (:attrs % first)]
+                       {:fld-name name
+                        :name-key (keyword name)
+                        :type-key (get-type type)
+                        :enum-type (when enum
+                                     (keywordize enum))
+                        :length (get-array-length type) }))
                   (zip/lefts node)))
     (vec
       (zip-xml/xml-> m :field
         (fn [f]
-          (let [fld-name (-> f first :attrs :name)
-                type-name (-> f first :attrs :type)
-                enum-name (-> f first :attrs :enum)]
-            {:fld-name fld-name
-             :name-key (keyword fld-name)
-             :type-key (get-type type-name)
-             :enum-type (when enum-name
-                          (keywordize enum-name))
-             :length (get-array-length type-name) }))))))
+          (let [{:keys [enum name type]} (-> f first :attrs)]
+            {:fld-name name
+             :name-key (keyword name)
+             :type-key (get-type type)
+             :enum-type (when enum
+                          (keywordize enum))
+             :length (get-array-length type) }))))))
 
 (defn get-extension-fields
   "Returns just the extension fields of a message; or nil if there are none."
@@ -77,15 +73,13 @@
     (when-let [ext-fields (zip/rights node)]
       (vec
         (for [f ext-fields]
-          (let [fld-name (-> f :attrs :name)
-                type-name (-> f :attrs :type)
-                enum-name (-> f :attrs :enum)]
-            {:fld-name fld-name
-             :name-key (keyword fld-name)
-             :type-key (get-type type-name)
-             :enum-type (when enum-name
-                          (keywordize enum-name))
-             :length (get-array-length type-name)
+          (let [{:keys [enum name type]} (:attrs f)]
+            {:fld-name name
+             :name-key (keyword name)
+             :type-key (get-type type)
+             :enum-type (when enum
+                          (keywordize enum))
+             :length (get-array-length type)
              }))))))
 
 (defn sort-fields
