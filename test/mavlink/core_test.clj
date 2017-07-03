@@ -199,7 +199,7 @@
                                                        :system-id 99
                                                        :component-id 88})]
       ;(pprint channel-simple)
-      (is (thrown-with-msg? Exception #"conflicts" 
+      (is (thrown-with-msg? Exception #"Enum values conflict" 
                   (parse
                     {:xml-sources [{:xml-file "common.xml"
                                     :xml-source (-> "test/resources/common.xml" io/input-stream)}

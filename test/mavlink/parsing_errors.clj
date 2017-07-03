@@ -8,7 +8,7 @@
 
 (deftest parsing
   (testing "Testing bad.xml"
-    (is (thrown-with-msg? Exception #"but not listed" 
+    (is (thrown-with-msg? Exception #"Missing a required include file" 
       (let [mavlink
             (parse {:mavlink-1-0 "not used"
                     :xml-sources [{:xml-file "bad.xml"
@@ -21,7 +21,7 @@
                     :component-id 88
                     :descriptions true})]))))
   (testing "Testing bad2.xml"
-    (is (thrown-with-msg? Exception #"conflicts with the following message ids" 
+    (is (thrown-with-msg? Exception #"Message ID's conflict"
       (let [mavlink
             (parse {:mavlink-1-0 "not used"
                     :xml-sources [{:xml-file "bad2.xml"
@@ -34,7 +34,7 @@
                     :component-id 88
                     :descriptions true})]))))
   (testing "Testing bad3.xml"
-    (is (thrown-with-msg? Exception #"conflicts with the following message names" 
+    (is (thrown-with-msg? Exception #"Message names conflict"
       (let [mavlink
             (parse {:mavlink-1-0 "not used"
                     :xml-sources [{:xml-file "bad3.xml"
@@ -46,7 +46,7 @@
                     :system-id 99
                     :component-id 88
                     :descriptions true})])))
-    (is (thrown-with-msg? Exception #"no file= attribute"
+    (is (thrown-with-msg? Exception #"Unable to determine the XML file name"
       (let [mavlink
             (parse {:mavlink-1-0 "not used"
                     :xml-sources [{:xml-source (-> "test/resources/bad3.xml" io/input-stream)}

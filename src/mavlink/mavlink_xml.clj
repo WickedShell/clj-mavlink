@@ -279,28 +279,22 @@
            messages-by-keyword messages-by-id source]} new-part]
   (let [conflicts (filterv #(% enum-to-value) (keys (:enum-to-value new-part)))]
     (when-not (empty? conflicts)
-      (throw (ex-info (str "Adding " source
-                           " there are conflicts with the following enums"
-                           conflicts
-                           ". The new values will override the existing values.")
+      (throw (ex-info "Enum values conflict"
                       {:cause :enum-conflicts
-                       :conflicts conflicts}))))
+                       :conflicts conflicts
+                       :source source}))))
   (let [conflicts (filterv #(get messages-by-id %) (keys (:messages-by-id new-part)))]
     (when-not (empty? conflicts)
-      (throw (ex-info (str "Adding " source
-                           " there are conflicts with the following message ids:"
-                           conflicts
-                           ". The new values will override the existing values.")
+      (throw (ex-info "Message ID's conflict"
                       {:cause :message-id-conflicts
-                       :conflicts conflicts}))))
+                       :conflicts conflicts
+                       :source source}))))
   (let [conflicts (filterv #(% messages-by-keyword) (keys (:messages-by-keyword new-part)))]
     (when-not (empty? conflicts)
-      (throw (ex-info (str "Adding " source
-                           " there are conflicts with the following message names:"
-                           conflicts
-                           ". The new values will override the existing values.")
+      (throw (ex-info "Message names conflict"
                       {:cause :message-name-conflicts
-                       :conflicts conflicts}))))
+                       :conflicts conflicts
+                       :source source}))))
   {:descriptions (merge descriptions (:descriptions new-part))
    :enum-to-value (merge enum-to-value (:enum-to-value new-part))
    :enums-by-group (merge enums-by-group (:enums-by-group new-part))
@@ -317,17 +311,19 @@
               (doseq [file includes]
                 (let [included (some #(= file (:xml-file %)) xml-sources)]
                   (when-not included
-                    (throw (ex-info (str  file " is included but not listed in :xml-sources: "
-                                          xml-sources)
-                                     {:cause :missing-xml-include})))))))]
+                    (throw (ex-info "Missing a required include file"
+                                     {:cause :missing-xml-include
+                                      :file file
+                                      :xml-sources xml-sources})))))))]
     (let [sources-with-zippers
             (mapv #(let [{:keys [xml-file xml-source]} %
                          zipper (-> xml-source xml/parse zip/xml-zip)
                          file-name (or (zip-xml/xml1-> zipper :mavlink (zip-xml/attr :file))
                                        xml-file)]
                      (when-not file-name
-                       (throw (ex-info (str "no file= attribute in XML and no :xml-file in " xml-source)
-                                       {:cause :missing-xml-file-id})))
+                       (throw (ex-info "Unable to determine the XML file name"
+                                       {:cause :missing-xml-file-id
+                                        :xml-source xml-source})))
                      (assoc % :zipper zipper
                               :file-name file-name))
                   xml-sources)]
