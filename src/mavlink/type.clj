@@ -95,7 +95,7 @@
                      {:cause :unknown-type
                       :type type-key}))))
 
-(defn byte-to-long
-  "Accept a byte, return it as a long."
+(defmacro byte-to-long
+  "Accept a byte, return it as a long"
   [b]
-  (bit-and (long b) 0xff))
+  `(bit-and ~b 0xff))
