@@ -1,14 +1,10 @@
 (ns mavlink.mavlink-xml
   (:require [clojure.data.xml :as xml]
-            [clojure.xml :as clj-xml]
             [clojure.zip :as zip]
             [clojure.data.zip.xml :as zip-xml]
             [clojure.string :as string]
             [mavlink.checksum :refer :all]
-            [mavlink.type :refer :all])
-  (:import [clojure.data.xml Element]))
-
-(def ^:const MAX-MESSAGE-SIZE 300)  ; the maximum message size
+            [mavlink.type :refer :all]))
 
 (defmacro keywordize
   "Take a string, replace all _ with - and put it in lower case,

@@ -168,7 +168,7 @@
    :decode-sm (atom start-state)
    :decode-message-info (atom nil)      ; internal to decode state machine
    :input-buffer                        ; internal to decoding
-     (let [byte-buffer (ByteBuffer/allocate MAX-MESSAGE-SIZE)]
+     (let [byte-buffer (ByteBuffer/allocate 300)] ; start with a buffer size bigger then is possible
        (.order byte-buffer ByteOrder/LITTLE_ENDIAN)
        byte-buffer)
    :statistics (atom {:bytes-received 0
