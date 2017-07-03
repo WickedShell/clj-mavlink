@@ -58,7 +58,7 @@
                     :component-id 88
                     :descriptions true})]))))
   (testing "Testing bad4.xml"
-    (is (thrown-with-msg? Exception #"failed to convert"
+    (is (thrown-with-msg? Exception #"Unable to parse a message id"
       (let [mavlink
             (parse {:mavlink-1-0 "not used"
                     :xml-sources [{:xml-file "bad4.xml"

@@ -17,18 +17,6 @@
   [s]
   `(keyword (string/lower-case (string/replace ^String ~s \_ \-))))
 
-(defn- get-value
-  "Take a string, if it is nil, return it, otherwise convert the string to a long
-   and return it. Return nil if it fails to convert. The idenitfier is
-   just used to build the error message"
-  [^String identifier ^String s]
-  (when s
-    (try
-      (Long/valueOf s)
-      (catch Exception e
-        (throw (ex-info (str identifier " >" s "< failed to convert to long.")
-                        {:cause :string-not-number}))))))
-
 (defn- get-type
   "Take a type string from the XML convert to the base type.
    That means strip off the array length indicator, if any
@@ -42,7 +30,13 @@
   [^String s]
   (when-let [array-spec (re-find (re-matcher #"\[\d+\]" s))]
     (when-let [length (re-find (re-matcher #"\d+" array-spec))]
-      (get-value (str s " array type length") length))))
+      (try
+        (Long/valueOf ^String length)
+        (catch Exception e
+          (throw (ex-info "Unable to parse array length"
+                          {:cause :string-not-number
+                           :type s
+                           :input length})))))))
 
 (defn get-fields
   "Returns just the fields of a message; or nil if there are none.
@@ -176,11 +170,18 @@
                                                         values-map (transient {})]
                                                    (if (nil? entry)
                                                      (persistent! values-map)
-                                                     (let [enum-name  (zip-xml/attr entry :name)
-                                                           value (get-value (str "In " file-name " " enum-name " value")
-                                                                            (zip-xml/attr entry :value))
-                                                           enum-value (long (or value (inc last-value)))]
-                                                       (recur enum-value
+                                                     (let [enum-name (zip-xml/attr entry :name)
+                                                           value-str (zip-xml/attr entry :value)
+                                                           enum-value (if value-str
+                                                                        (try
+                                                                          (Long/valueOf ^String value-str)
+                                                                          (catch Exception e
+                                                                            (throw (ex-info "Unable to parse an enum value"
+                                                                                            {:cause :string-not-number
+                                                                                             :input value-str
+                                                                                             :enum-name enum-name}))))
+                                                                        (inc last-value))]
+                                                       (recur (long enum-value)
                                                               (first rest-entries)
                                                               (rest rest-entries)
                                                               (assoc! values-map
@@ -202,8 +203,14 @@
               zipper :mavlink :messages :message
               (fn[m]
                 (let [msg-name (-> m first :attrs :name)
-                      msg-id (get-value (str "In " file-name " " msg-name " id")
-                                            (-> m first :attrs :id))
+                      msg-id-str (-> m first :attrs :id)
+                      msg-id (try
+                               (Long/valueOf ^String msg-id-str)
+                               (catch Exception e
+                                 (throw (ex-info "Unable to parse a message id"
+                                                 {:cause :string-not-number
+                                                  :input msg-id-str
+                                                  :message-name msg-name}))))
                       fields (sort-fields (get-fields m))
                       ext-fields (sort-fields (get-extension-fields m))
                       payload-size (apply + (map #(let [{:keys [type-key length]} %]
