@@ -434,7 +434,8 @@
    error is thrown. The error is thrown so that the decoding call can catch the error
    The decoded message is included in the thrown error."
   [{:keys [decode-message-info secret-key statistics accept-unsigned-packets
-           ^ByteBuffer input-buffer signing-tuples ^MessageDigest decode-sha256] :as channel}
+           ^ByteBuffer input-buffer signing-tuples ^MessageDigest decode-sha256
+           encode-timestamp] :as channel}
    ^long start-signature-idx]
   {:pre [@secret-key]}
   (let [packet (.array input-buffer)
@@ -471,23 +472,17 @@
         (if (or valid-signature @accept-unsigned-packets)
           (do
             (when valid-signature
-              (swap! signing-tuples assoc tuple timestamp))
-            ; FIXME: if timestamp is larger then encode-timestamp, reset encode-timestamp to timestamp
+              (swap! signing-tuples assoc tuple timestamp)
+              (if (> timestamp @encode-timestamp)
+                (reset! encode-timestamp timestamp)
+                (swap! encode-timestamp inc)))
             (decode-mavlink2 channel (.get input-buffer start-signature-idx)))
           (do
             (swap! statistics #(assoc % :bad-signatures (inc (:bad-signatures %))))
-            (throw (ex-info "Decoding signature sha256 error."
-                            {:cause :bad-signature
-                             :msg-id (:msg-id @decode-message-info)
-                             :timestamp timestamp})))))
+            nil)))
       (do
         (swap! statistics #(assoc % :bad-timestamps (inc (:bad-timestamps %))))
-        (throw (ex-info "Decoding signature timestamp error."
-                        {:cause :bad-timestamp
-                         :msg-id (:msg-id @decode-message-info)
-                         :signing-tuple tuple
-                         :tuple-timestamp tuple-timestamp
-                         :timestamp timestamp}))))))
+        nil))))
 
 (defn signature-state
   [{:keys [decode-sm ^ByteBuffer input-buffer protocol statistics] :as channel} a-byte]

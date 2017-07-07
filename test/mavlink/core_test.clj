@@ -471,11 +471,28 @@
   (testing "Testing MAVLink 2.0 signatures."
     (let [secret-key (bytes (byte-array (map (comp byte int) "abcdefghijklmnopqrstuvwxyz123456")))]
       (update-channel channel-2 :secret-key secret-key)
-      (let [bs-empty (encode channel-2 {:message-id :meminfo :sequence-id 1})
+      (let [ bs-empty (encode channel-2 {:message-id :meminfo :sequence-id 1})
+            bs-empty-timestamp @(:encode-timestamp channel-2)
+            bs-empty-plus-timestamp (+ (get-timestamp) 6000000)
             bs-1 (encode channel-2 {:message-id :meminfo :brkval 44})
+            bs-1-timestamp @(:encode-timestamp channel-2)
             bs-2 (encode channel-2 {:message-id :meminfo :freemem 33})
+            bs-2-timestamp @(:encode-timestamp channel-2)
             bs-3 (encode channel-2 {:message-id :meminfo :freemem32 66})
-            bs-all (encode channel-2 {:message-id :meminfo :freemem32 66 :brkval 44 :freemem 33})]
+            bs-3-timestamp @(:encode-timestamp channel-2)
+            bs-all (encode channel-2 {:message-id :meminfo :freemem32 66 :brkval 44 :freemem 33})
+            bs-all-timestamp @(:encode-timestamp channel-2)]
+        (is (< bs-empty-timestamp bs-1-timestamp bs-2-timestamp bs-3-timestamp bs-all-timestamp))
+        ; This decode is out of order, bu tsince it is the first, it is accepted.
+        (is (= [{:message-id :meminfo, :sequence-id 2, :system-id 99, :component-id 88, :link-id 0, :brkval 44, :freemem 0, :freemem32 0}]
+               (decode-bytes channel-2 bs-1)))
+        ; Because the bs-1-timestamp has been decoded, the bs-empty message cannot be decoded due to timestamp error
+        (is (= [] (decode-bytes channel-2 bs-empty)))
+        ; Because the bs-1-timestamp has been decoded, the bs-1 message cannot be decoded due to timestamp error
+        (is (= [] (decode-bytes channel-2 bs-1)))
+        ;
+        ; Now wipe out the signing tuples so the messages can be decoded in order.
+        (reset! (:signing-tuples channel-2) {})
         (is (= [{:message-id :meminfo, :sequence-id 1, :system-id 99, :component-id 88, :link-id 0, :brkval 0, :freemem 0, :freemem32 0}]
                (decode-bytes channel-2 bs-empty)))
         (is (= [{:message-id :meminfo, :sequence-id 2, :system-id 99, :component-id 88, :link-id 0, :brkval 44, :freemem 0, :freemem32 0}]
@@ -486,6 +503,11 @@
                (decode-bytes channel-2 bs-3)))
         (is (= [{:message-id :meminfo, :sequence-id 5, :system-id 99, :component-id 88, :link-id 0, :brkval 44, :freemem 33, :freemem32 66}]
                (decode-bytes channel-2 bs-all)))
+        ;
+        ; Now reset the signing tuple so it is more than one minute in the future of the empty message; then attempt
+        ; to decode the empty message, it should return nil
+        (reset! (:signing-tuples channel-2) { '(99 88 0) bs-empty-plus-timestamp})
+        (is (= [] (decode-bytes channel-2 bs-1)))
       )))
   (testing "Testing MAVLink 2.0 signatures, alternate open-channel interface."
     (let [new-channel (open-channel mavlink-2 {:protocol :mavlink2
@@ -581,13 +603,10 @@
                  :servo16_raw 0
                  }]
                (decode-bytes new-channel servo-2)))
-        (is (thrown-with-msg? Exception #"timestamp error"
-               (decode-bytes new-channel servo-2)))
+        (is (= [] (decode-bytes new-channel servo-2)))
         (aset-byte servo-mangled 55 (byte 1))
-        (is (thrown-with-msg? Exception #"sha256 error"
-               (decode-bytes new-channel servo-mangled)))
-        (is (thrown-with-msg? Exception #"timestamp error"
-               (decode-bytes new-channel servo-2)))
+        (is (= [] (decode-bytes new-channel servo-mangled)))
+        (is (= [] (decode-bytes new-channel servo-2)))
         (is (= [{:message-id :servo-output-raw, :sequence-id 9, :system-id 99, :component-id 88, :link-id 22,
                  :time_usec 0
                  :port 0 
