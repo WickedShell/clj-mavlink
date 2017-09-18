@@ -234,7 +234,7 @@
       (when @continue
 	(when message
 	  ; not shutting down and message to encode received
-	  ; look up the message-info based on the :messae-id of the message
+	  ; look up the message-info based on the :message-id of the message
 	  (if-let [message-info ((:message-id message) (:messages-by-keyword mavlink))]
 	    (do
 	     ; update the sequence id then encode the message

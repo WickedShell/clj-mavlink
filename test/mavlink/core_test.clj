@@ -60,6 +60,16 @@
        (.update-checksum crc crc-seed))
      (.crcValue crc))))
 
+(defn encode-test
+  "Given a message map, encode it then get the decoded and round robin it back to the encode."
+  [message]
+  (async/go
+    (async/>! encode-input-channel message)
+    (let [decoded-message (async/<!! decode-output-channel)]
+      (doseq [field (keys message)]
+        (is (not= (field message) (field decoded-message))
+          (str field " field in " (:field message) ", field out " (field decoded-message)))))))
+  
 (def mavlink (parse {:xml-sources [{:xml-file "test-include.xml"
                                     :xml-source (-> "test/resources/test-include.xml" io/input-stream)}
                                    {:xml-file "common.xml"
@@ -166,17 +176,17 @@
     (is (not (nil? (:sensor-offsets (:messages-by-keyword (:mavlink channel)))))
         "Include from ardupilotmega.xml failed."))
   (testing "For valid message checksums."
-    (is (== (-> (:mavlink channel) :messages-by-keyword :heartbeat :crc-seed) 50)
+    (is (== (-> mavlink :messages-by-keyword :heartbeat :crc-seed) 50)
         "Hearbeat magic byte checksum.")
-    (is (== (-> (:mavlink channel) :messages-by-keyword :sys-status :crc-seed) 124)
+    (is (== (-> mavlink :messages-by-keyword :sys-status :crc-seed) 124)
         "Sys Status magic byte checksum.")
-    (is (== (-> (:mavlink channel) :messages-by-keyword :change-operator-control :crc-seed) 217)
+    (is (== (-> mavlink :messages-by-keyword :change-operator-control :crc-seed) 217)
         "Change Operator Control magic byte checksum.")
-    (is (== (-> (:mavlink channel) :messages-by-keyword :param-set :crc-seed) 168)
+    (is (== (-> mavlink :messages-by-keyword :param-set :crc-seed) 168)
         "Param Set magic byte checksum.")
-    (is (== (-> (:mavlink channel) :messages-by-keyword :ping :crc-seed) 237)
+    (is (== (-> mavlink :messages-by-keyword :ping :crc-seed) 237)
         "output Raw magic byte checksum.")
-    (is (== (-> (:mavlink channel) :messages-by-keyword :servo-output-raw :crc-seed) 222)
+    (is (== (-> mavlink :messages-by-keyword :servo-output-raw :crc-seed) 222)
         "output Raw magic byte checksum."))
   (testing "Message round trips."
     (doseq [id (range 255)]
@@ -185,9 +195,7 @@
               encoded (encode channel message)
               decoded (dissoc (first (decode-bytes channel encoded))
                               :sequence-id :system-id :component-id)]
-          (is (= message decoded)
-              "Roundtrip failed.")
-          (not= message decoded))))))
+          (encode-test message))))))
 
 (deftest simple-parser-test
   (testing "Testing Simple parsing of enums."
