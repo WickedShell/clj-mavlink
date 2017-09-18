@@ -1,7 +1,9 @@
 (ns mavlink.test
   (:require [clojure.java.io :as io]
+            [clojure.core.async :as async]
             [mavlink.core :refer :all])
   (:import  [java.nio ByteBuffer ByteOrder]
+            [java.io PipedInputStream PipedOutputStream]
             [com.MAVLink MAVLinkPacket Parser]
             [com.MAVLink.common msg_heartbeat]
             [com.MAVLink.enums MAV_AUTOPILOT MAV_STATE MAV_TYPE]))
@@ -16,15 +18,67 @@
                                ]
                     }))
 
-(def channel (open-channel mavlink-map {:protocol :mavlink2
-                                        :system-id 99
-                                        :component-id 88
-                                        :link-id 77}))
-
 (defn mk-bytes
   [^String s]
   (into-array Byte/TYPE (mapv #(.byteValue (Long/valueOf % 16)) (clojure.string/split s #" "))))
 
+(defn mk-pipe
+  []
+  (let [pipe-in (PipedInputStream.)
+        pipe-out (PipedOutputStream. pipe-in)]
+    {:pipe-in pipe-in
+     :pipe-out pipe-out}))
+
+(defonce decode-input-pipe (mk-pipe))
+(defonce decode-output-channel (async/chan 300))
+(defonce encode-input-channel  (async/chan 300))
+(defonce encode-output-channel (async/chan 300))
+
+(defn decode-bytearray
+  [^bytes the-array]
+  (.write ^PipedOutputStream (:pipe-out decode-input-pipe) the-array 0 (count the-array)))
+
+(defn decode-bytes-from-string
+  [String s]
+  (decode-bytearray (mk-bytes s)))
+
+(defn encode-message
+  [message]
+  (async/go (async/>! encode-input-channel message))
+  nil)
+
+(defn get-channel
+  "Returns result of opening the channel, a map with :close-fn and :statistics bindings."
+  [mavlink]
+  ; start decode output thread
+  (async/thread
+    (loop [message (async/<!! decode-output-channel)]
+      (when message
+        (println "\nDecoded message:\n" message)
+        (recur (async/<!! decode-output-channel)))))
+
+  ; start encode output thread
+  (async/thread
+    (loop [message-bytes (async/<!! encode-output-channel)]
+      (decode-bytearray message-bytes)
+      (when message-bytes
+        (recur (async/<!! encode-output-channel)))))
+
+  (open-channel mavlink {:protocol :mavlink1
+                         :system-id 99
+                         :component-id 88
+                         :link-id 77
+                         :decode-input-stream (:pipe-in decode-input-pipe)
+                         :decode-output-channel decode-output-channel
+                         :encode-input-channel encode-input-channel
+                         :encode-output-link encode-output-channel
+                         :exception-handler #(println "clj-mavlink/test exception:\n" %1)
+                         :accept-message-handler #(do
+                                                    (println "clj-mavlink/accept-message:\n" %1)
+                                                    true)
+                         :signing-options nil}))
+ 
+(def channel (get-channel mavlink-map))
 
 (defonce ^Parser mavParser
   (let [parser (new Parser true)]

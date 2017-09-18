@@ -10,21 +10,21 @@
 
 (defonce ^:const INCOMPAT-FLAG-SIGNED 0x01)
 
-(def ^:const MAVLINK1-START-VALUE 254)
+(defonce ^:const MAVLINK1-START-VALUE 254)
 (defonce MAVLINK1-START-BYTE (.byteValue (new Long MAVLINK1-START-VALUE)))
-(def ^:const MAVLINK1-HDR-SIZE 6)
-(def ^:const MAVLINK1-HDR-CRC-SIZE 8)
+(defonce ^:const MAVLINK1-HDR-SIZE 6)
+(defonce ^:const MAVLINK1-HDR-CRC-SIZE 8)
 
-(def ^:const MAVLINK2-START-VALUE 253)
+(defonce ^:const MAVLINK2-START-VALUE 253)
 (defonce MAVLINK2-START-BYTE (.byteValue (new Long MAVLINK2-START-VALUE)))
-(def ^:const MAVLINK2-HDR-SIZE 10)
-(def ^:const MAVLINK2-HDR-CRC-SIZE 12)
-(def ^:const MAVLINK2-HDR-CRC-SIGN-SIZE 25)
-(def ^:const MAVLINK2-SIGN-SIZE 13)
-(def ^:const SIGN-PACKETS-FLAG 0x1)
+(defonce ^:const MAVLINK2-HDR-SIZE 10)
+(defonce ^:const MAVLINK2-HDR-CRC-SIZE 12)
+(defonce ^:const MAVLINK2-HDR-CRC-SIGN-SIZE 25)
+(defonce ^:const MAVLINK2-SIGN-SIZE 13)
+(defonce ^:const SIGN-PACKETS-FLAG 0x1)
 
-(defonce ^:const BUFFER_SIZE (+ MAVLINK2-HDR-CRC-SIGN-SIZE 256))
-(def ^:const ONE-MINUTE 6000000)
+(defonce ^:const BUFFER-SIZE (+ MAVLINK2-HDR-CRC-SIGN-SIZE 256))
+(defonce ^:const ONE-MINUTE 6000000)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Encode support functions
@@ -33,23 +33,22 @@
 (defn- encode-mavlink1
   "Encodes a MAVLink1 message.
 
-     channel - the internal channel map
-     sequencce-id - the sequence id to use in the message
-     message - the message map as received from the application
-     message-info - the mavlink message information
+   channel - the internal channel map
+   sequencce-id - the sequence id to use in the message
+   message - the message map as received from the application
+   message-info - the mavlink message information
    "
-  ^bytes [{:keys [mavlink system-id component-id ] :as channel}
+  ^bytes [{:keys [mavlink system-id component-id ]}
 	  ^long sequence-id
           message
-          message-info]
-  {:pre [(<= 0 (:msg-id message-info) 255)   ; mavlink 1.0 only
+          {:keys [encode-fns ^long payload-size crc-seed
+                ^long msg-id msg-key]}]
+  {:pre [(<= 0 msg-id 255)   ; mavlink 1.0 only
          (instance? Long system-id)
          (instance? Long component-id)
          ]}
-  (let [{:keys [encode-fns ^long payload-size crc-seed
-                ^long msg-id msg-key]} message-info
-        ^long sys-id (or (:system-id message-info) system-id)
-        ^long comp-id (or (:component-id message-info) component-id)
+  (let [^long sys-id (or (:system-id message) system-id)
+        ^long comp-id (or (:component-id message) component-id)
         payload (let [byte-buffer (ByteBuffer/allocate payload-size)]
                   (.order byte-buffer ByteOrder/LITTLE_ENDIAN)
                   byte-buffer)
@@ -61,7 +60,7 @@
     (aset-byte packed 4 (.byteValue (new Long comp-id)))
     (aset-byte packed 5 (.byteValue (new Long msg-id)))
     (doseq [encode-fn encode-fns]
-      (encode-fn mavlink payload message-info))
+      (encode-fn mavlink payload message))
     ; now copy the array from the payload to the packed array.
     (System/arraycopy (.array payload) 0 packed MAVLINK1-HDR-SIZE (.position payload))
     ; finally calculate and put the checksum in, lsb first.
@@ -85,14 +84,14 @@
 
    signature = sha256(secret_key + header + payload + CRC + link-ID + timestamp)
 
-     channel - the internal channel map
-     packet - the bytes of the packet (with uninitialized signing bytes)
-     secret-key - the secret-key to sign the packet with
-     encodesha256 - the MessageDigest for signing the packet
-     signature-start-idx - the index of the start of the signature in the packet
-     link-id - the link id to use in the signature
+   encode-timestamp - the encode timestamp atom
+   packet - the bytes of the packet (with uninitialized signing bytes)
+   secret-key - the secret-key to sign the packet with
+   encodesha256 - the MessageDigest for signing the packet
+   signature-start-idx - the index of the start of the signature in the packet
+   link-id - the link id to use in the signature
   "
-  [{:keys [encode-timestamp] :as channel}
+  [encode-timestamp
    ^bytes packet
    secret-key
    ^MessageDigest encode-sha256
@@ -127,24 +126,23 @@
 
    channel - the internal channel map
    sequencce-id - the sequence id to use in the message
-   secret-key - the secret-key to sign the packets with (or nil if not signing packets)
+   secret-key - the secret-key holding the key to sign the packets with
    encode-sha256 - the MessageDigest for signing encoded messages
    message - the message map as received from the application
    message-info - the mavlink message information
   "
-  ^bytes [{:keys [mavlink system-id component-id link-id] :as channel}
+  ^bytes [{:keys [mavlink system-id component-id link-id encode-timestamp] :as channel}
 	  sequence-id
 	  secret-key
 	  ^MessageDigest encode-sha256
           message
-	  message-info]
-  {:pre [(<= 0 (:msg-id message-info) 16777215)
+	  {:keys [encode-fns extension-encode-fns ^long extension-payload-size
+                  crc-seed ^long msg-id msg-key]}]
+  {:pre [(<= 0 msg-id 16777215)
          (instance? Long system-id)
          (instance? Long component-id)
          ]}
-  (let [{:keys [encode-fns extension-encode-fns ^long extension-payload-size
-                crc-seed ^long msg-id msg-key]} message-info
-        ^long sys-id (or (:system-id message) system-id)
+  (let [^long sys-id (or (:system-id message) system-id)
         ^long comp-id (or (:component-id message) component-id)
         ^long link-id (or (:link-id message) link-id)
         payload (let [byte-buffer (ByteBuffer/allocate extension-payload-size)]
@@ -192,7 +190,7 @@
                    (.byteValue (new Long (bit-and (bit-shift-right checksum 8) 0xff)))))
       ; the packet is ready to go, if there is a secret-key, then the message should be signed
       (when secret-key
-        (sign-packet channel
+        (sign-packet encode-timestamp
                      packed
 		     secret-key
 		     encode-sha256
@@ -211,18 +209,25 @@
    the bytes will be writtenn to the stream, otherwise it is assumed the link is a channel
    and the byte array will be written to the channel.
 
+   Note, the value of the protocol atom and secret-key are set by the application in
+   the open-channel function and are then updated by the decode thread.
+   Once the protocol is MAVlink 2 signed, all outgoing messages are encoded
+   as signed MAVlink2 message. To change back to an earlier protocol, the channel must be
+   closed and reopened.
+
    channel - the internal channel map
    input-channel - a clojure channel to take messages from
    output-link - the stream to write the encoded bytes to or
                  a clojue channel to put the messages to
    "
-  ^bytes [{:keys [mavlink continue encode-protocol signing-options statistics] :as channel}
+  ^bytes [{:keys [mavlink continue protocol signing-options statistics] :as channel}
           input-channel
 	  output-link]
   {:pre [(instance? clojure.lang.Atom statistics)
          ]}
-  (let [link-is-stream (instance? java.io.OutputStream)
+  (let [link-is-stream (instance? OutputStream output-link)
         encode-sha256 (MessageDigest/getInstance "SHA-256")
+        {:keys [secret-key]} signing-options
         sequence-id (volatile! 0)] 
     (loop [message (async/<!! input-channel)]
       ; return normally if continue
@@ -233,24 +238,17 @@
 	  (if-let [message-info ((:message-id message) (:messages-by-keyword mavlink))]
 	    (do
 	     ; update the sequence id then encode the message
-	      (if-let [seq-id- (:sequence-id message-info)]
+	      (if-let [seq-id- (:sequence-id message)]
 		 (vreset! sequence-id (mod seq-id- 256))
 		 (vswap! sequence-id #(mod (inc %) 256)))
-	      (if-let [packed (case (or (:mavlink-protocol message)
-				        @encode-protocol))
+	      (if-let [packed (case (or (:mavlinkProtocol message)
+				        @protocol)
 				  :mavlink1
 				    (encode-mavlink1 channel @sequence-id message message-info)
-				  :mavlink1-mavlink2
-				    (encode-mavlink1 channel @sequence-id message message-info)
-				  :mavlink2-signed
-				    ; FIXME if supposed to be signing, but not key, will go unsigned
-				    ; or should it be dropped?
-				    (encode-mavlink2 channel
-						     @sequence-id
-						     (:secret-key signing-options)
-						     encode-sha256 message message-info)
-				  :mavlink2-unsigned
-				    (encode-mavlink2 channel @sequence-id nil encode-sha256 message message-info)
+				  :mavlink2
+				    (encode-mavlink2 channel @sequence-id
+						     @secret-key encode-sha256
+                                                     message message-info)
 				    )]
 	        ; message successfully encoded, update statistics and send it out
 	        (do
@@ -279,19 +277,18 @@
    statistics - the statistics atom
    "
   [message
-   message-info
+   decode-fns
    ^ByteBuffer buffer
    statistics]
-  (let [{:keys [msg-key decode-fns]} message-info]
-    ; position the buffer to the start of the payload
-    (.position buffer MAVLINK1-HDR-SIZE)
-    ; decode the message, restart the decode state machine, then
-    ; save the message and return it!
-    (let [message (persistent! (reduce (fn [message decode-fn] (decode-fn buffer message))
-				       (transient message)
-                                       decode-fns))]
-      (swap! statistics update-in [:messages-decoded] inc)
-      message)))
+  ; position the buffer to the start of the payload
+  (.position buffer MAVLINK1-HDR-SIZE)
+  ; decode the message, restart the decode state machine, then
+  ; save the message and return it!
+  (let [message (persistent! (reduce (fn [message decode-fn] (decode-fn buffer message))
+                                     (transient message)
+                                     decode-fns))]
+    (swap! statistics update-in [:messages-decoded] inc)
+    message))
 
 (defn- decode-mavlink2
   "Decode a MAVLink 2.0 message in the channel's input buffer.  If there is a
@@ -311,7 +308,12 @@
    statistics - the statistics atom
    signed-message - whether the message was signed
    "
-  [message message-info ^ByteBuffer buffer msg-payload-size statistics signed-message]
+  [message
+   message-info
+   ^ByteBuffer buffer
+   msg-payload-size
+   statistics
+   signed-message]
   (let [{:keys [extension-payload-size msg-key decode-fns extension-decode-fns]} message-info]
     ; position the buffer to the end of the payload
     (.position buffer (+ MAVLINK2-HDR-SIZE msg-payload-size))
@@ -321,11 +323,10 @@
         (.put buffer (byte 0))))
     ; position the buffer at the start of the payload
     (.position buffer MAVLINK2-HDR-SIZE)
-    ; decode the message, restart the decode state machine, then
-    ; save the message and return it!
+    ; decode the message, and return it!
     (let [message (persistent! (reduce (fn [message decode-fn] (decode-fn buffer message))
 				       (transient (assoc! message :mavlink-signed-message
-						                  signed-message}))
+						                  signed-message))
                                        (concat decode-fns extension-decode-fns)))]
       (swap! statistics update-in [:messages-decoded] inc)
       message)))
@@ -345,7 +346,7 @@
 	     start-sha256-idx]
   ; reset the MessageDigest
   (.reset decode-sha256)
-  (.update decode-sha256 @secret-key 0 32)
+  (.update decode-sha256 secret-key 0 32)
   (.update decode-sha256 packet 0 start-sha256-idx) ; The link-id and timestamps bytes are included
   (let [sha256-bytes ^bytes (.digest decode-sha256)]
     (loop [idx start-sha256-idx
@@ -359,25 +360,6 @@
 	  ; otherwise go to the next index
 	  (recur (inc idx)
 		 (inc sidx)))))))
-
-(defn- verify-unsigned-packet
-  "Call the application provided unsigned-packet-handler to verify an unsigned-packet
-   handler - the unsigned packet handler
-   buffer - the buffer holding all the message bytes
-   msg-key - the message id
-   payload-size - the payload size (needed to calculate the link id location
-  "
-  [handler
-   ^ByteBuffer buffer
-   message-info
-   payload-size]
-  (when handler
-    (when-let [message (decode-mavlink2 message-info
-			                buffer
-					payload-size
-					statistics
-					link-id)]
-      (handler message))))
 
 (defn- verify-signature
   "Verify the signature of the MVLink 2.0 message in the buffer.
@@ -400,18 +382,15 @@
    statistics - the statistics
    "
   ^Boolean
-  [{:keys [signing-options
-           signing-tuples
-	   ^MessageDigest decode-sha256
-           encode-protocol
-	   encode-timestamp] :as channel}
-    ^ByteBuffer buffer
-    payload-size
-    start-signature-idx
-    message-info
-    statistics]
-  (let [{:keys [secret-key secret-keyset]} signing-options
-        packet (.array buffer)
+  [secret-key secret-keyset
+   signing-tuples
+   ^MessageDigest decode-sha256
+   encode-timestamp
+   ^ByteBuffer buffer payload-size
+   start-signature-idx
+   message-info
+   statistics]
+  (let [packet (.array buffer)
         tuple (sequence [(.get buffer 5)                      ; system id
                          (.get buffer 6)                      ; component id
                          (.get buffer ^long start-signature-idx)])  ; link id
@@ -425,42 +404,31 @@
         start-sha256-idx (+ start-signature-idx 7)]
     (if (or (nil? tuple-timestamp)
             (< tuple-timestamp timestamp (+ tuple-timestamp ONE-MINUTE)))
-	(let [curr-key (when (and @secret-key
-			        (try-secret-key decode-sha256
-					        @secret-key
-					        packet
-					        start-sha256-idx))
-			 @secret-key)
-	      valid-key (or curr-key
-			    (loop [key-to-try (first secret-keyset)
-				   rest-keys (rest secret-keyset)]
-			      (when key-to-try
-				(if (try-secret-key decode-sha256
-						    key-to-try
-						    packet
-						    start-sha256-idx)
-				  key-to-try
-				  (recur (first rest-keys)
-					 (rest rest-keys))))))]
-	  ; if the current secret-key is invalid (or there wasn't one) reset
-	  ; the secret-key to the valid-key. This will cause encoding to start
-	  ; using the new key in the next signing operation, or if it is nil
-	  ; that will cause encoding to stop signing messages. (If a message is in
-	  ; the middle of encoding it may or may not be signed correctly, however
-	  ; the next message will be signed correctly.)
-	  (when-not curr-key
-	    (swap! signing-options assoc :secret-key valid-key)
-	    (when (and valid-key
-		       (not= @encode-protocol :mavlink2-signed))
-              (swap! encode-protocol :mavlink2-signed)))
-	  (if valid-key
-	    (do
+      (let [valid-signature? (or (and @secret-key
+                                      (try-secret-key decode-sha256
+                                                      @secret-key
+                                                      packet
+                                                      start-sha256-idx))
+                                 (loop [key-to-try (first secret-keyset)
+                                        rest-keys (rest secret-keyset)]
+                                   (when key-to-try
+                                     (if (try-secret-key decode-sha256
+                                                         key-to-try
+                                                         packet
+                                                         start-sha256-idx)
+                                       (do
+                                         (reset! secret-key key-to-try)
+                                         true)
+                                       (recur (first rest-keys)
+                                              (rest rest-keys))))))]
+	  (if valid-signature?
+	    (do ; housekeeping stuff
               (swap! signing-tuples assoc tuple timestamp)
-               (if (> timestamp @encode-timestamp)
-                 (reset! encode-timestamp timestamp)
-                 (swap! encode-timestamp inc))
+              (if (> timestamp @encode-timestamp)
+                (reset! encode-timestamp timestamp)
+                (swap! encode-timestamp inc))
               true)
-	    (do
+	    (do ; bad signature, update statistics
 	      (swap! statistics update-in [:bad-signatures] inc)
 	      false)))
       (do
@@ -487,18 +455,21 @@
    num-bytes - the number of bytes to read
    "
   ^Boolean [statistics
-            ^Input-Stream input-stream
-	    ^ByteByffer buffer
+            ^InputStream input-stream
+	    ^ByteBuffer buffer
 	    num-bytes]
   (if-let [buffer-array (.array buffer)]
-    (loop [num-bytes-read (.read buffer-array (.position buffer) num-bytes)]
-      (swap! statistics update-in [:bytes-read] #(+ num-bytes-read %))
-      (if (neg? num-bytes-read) ; end of stream has been reached
-        false
-	(if (== num-bytes num-bytes-read)
-	  true
-	  (recur (+ num-bytes-read
-		  (.read buffer-array (.position buffer) (- num-bytes num-bytes-read)))))))
+    (let [curr-position (.position buffer)]
+      (loop [num-bytes-read (.read input-stream buffer-array curr-position num-bytes)]
+        (swap! statistics update-in [:bytes-read] #(+ num-bytes-read %))
+        (if (neg? num-bytes-read) ; end of stream has been reached
+          false
+          (if (== num-bytes num-bytes-read)
+            (do
+              (.position buffer (+ curr-position num-bytes))
+              true)
+            (recur (+ num-bytes-read
+                    (.read input-stream buffer-array (.position buffer) (- num-bytes num-bytes-read))))))))
     false))
 
 (defn- verify-checksum
@@ -510,12 +481,12 @@
    crc-seed - CRC seed for calculating the checksum (specific to the message type)
    lsb-idx - the index of the LSB of the CRC (the MSB follows the LSB)
    "
-  ^Boolean [buffer crc-seed lsb-idx]
-  (let [checksum-lsb (byte-to-long (.get input-buffer lsb-idx))
-        checksum-msb (byte-to-long (.get input-buffer (inc lsb-idx)))
+  ^Boolean [^ByteBuffer buffer crc-seed ^long lsb-idx]
+  (let [checksum-lsb (byte-to-long (new Long (.get buffer lsb-idx)))
+        checksum-msb (byte-to-long (new Long (.get buffer (inc lsb-idx))))
 	checksum (bit-or (bit-and checksum-lsb 0xff)
 			 (bit-and (bit-shift-left checksum-msb 8) 0xff00))
-	checksum-calc (compute-checksum buffer 1 (dec lsb-idx) crc-seed)]
+	checksum-calc (compute-checksum buffer 1 lsb-idx crc-seed)]
     (== checksum checksum-calc)))
 
 (defn- mavlink2-payload-state
@@ -533,43 +504,72 @@
    message-info - mavlink message information for message in buffer
    statistics - statistics
    "
-  [{:keys [unsigned-packet-handler signing-options decode-protocol] :as channel}
+  [{:keys [accept-message-handler encode-timestamp signing-options protocol] :as channel}
    ^ByteBuffer buffer
    payload-size
-   ^java.io.Inputstream input-stream
+   ^InputStream input-stream
    output-channel
    message
    message-info
    statistics]
-  (let [signed-message (not (zero? (bit-and (.get input-buffer 2) INCOMPAT-FLAG-SIGNED)))
-        bytes-to-read (if signed-messages
+  (let [{:keys [decode-sha256 secret-key secret-keyset signing-tuples]} signing-options
+        signed-message (not (zero? (bit-and (.get buffer 2) INCOMPAT-FLAG-SIGNED)))
+	signature-verified (when signed-message
+                             ; verify-signature counts bad signatures,
+                             ; updates the secret-key if it changes, and
+                             ; returns whether the signature verified
+                             (or (verify-signature secret-key secret-keyset
+                                                   signing-tuples
+                                                   decode-sha256
+                                                   encode-timestamp
+                                                   buffer payload-size
+                                                   (+ MAVLINK2-HDR-CRC-SIZE payload-size)
+                                                   message-info statistics)
+                                 (when accept-message-handler
+                                   (accept-message-handler (assoc message
+                                                                 :signed-message signed-message
+                                                                 :current-protocol @protocol)))))
+        bytes-to-read (if signed-message
 			; read payload, CRC, and the signature
 	                (+ payload-size 2 MAVLINK2-SIGN-SIZE)
 			; read only the payload and CRC
 	                (+ payload-size 2))
-        bytes-in-message (+ MAVLINK2-HDR-SIZE bytes-to-read)]
+        bytes-in-message (+ MAVLINK2-HDR-SIZE bytes-to-read)
+        ]
     (when (read-bytes statistics input-stream buffer bytes-to-read)
       (if (verify-checksum buffer
 			   (:crc-seed message-info)
 			   (+ MAVLINK2-HDR-SIZE payload-size))  ; compute the checksum LSB
-        ; if okay to decode
-	(if (if signed-message
-	      (verify-signature channel buffer payload-size start-signature-idx message-info)
-	      (verify-unsigned-packet unsigned-packet-handler buffer message))
-	  ; okay to decode, decode the message
-	  (if-let [message (decode-mavlink2 message-info
-					    buffer
-					    payload-size
-					    statistics
-					    signed-message)]
-	      (do
-		(swap! statistics update-in [:bytes-decoded] #(+ bytes-in-message %))
-		(async/>!! output-channel message))
-	      ; not okay to decode, so update the dropped mavlink2
-	      (when-not signed-message
-		(swap! statistics update-in [:bad-mavlink2] inc)))
-	  ; update statistics on messages dropped due to bad checksums
-	  (swap! statistics update-in [:bad-checksums] inc)))
+        (let [okay-to-decode (case @protocol
+                               :mavlink1
+                                 (when (or (not signed-message)
+                                           (and signed-message
+                                                signature-verified))
+                                   (reset! protocol :mavlink2))
+                               :mavlink2
+                                 (if signed-message
+                                   signature-verified    ; signed and verified?
+                                   (or (not @secret-key) ; shouldn't be signed so okay
+                                       (do               ; should be signed not okay
+                                         (swap! statistics update-in
+                                                [:unsigned-messages] inc)
+                                         false))))]
+          ; if okay to decode
+          (when okay-to-decode
+            ; okay to decode, decode the message
+            (if-let [message (decode-mavlink2 message
+                                              message-info
+                                              buffer
+                                              payload-size
+                                              statistics
+                                              signed-message)]
+                (do
+                  (swap! statistics update-in [:bytes-decoded] #(+ bytes-in-message %))
+                  (async/>!! output-channel message))
+                ; failed to decode the message
+                (swap! statistics update-in [:decode-failed] inc))))
+        ; update statistics on messages dropped due to bad checksums
+	(swap! statistics update-in [:bad-checksums] inc)))
       ; regardless of what happened, go to the start state
       #(start-state channel buffer input-stream output-channel statistics)))
 
@@ -598,20 +598,20 @@
    "
   [{:keys [mavlink]  :as channel}
    ^ByteBuffer buffer
-   ^java.io.Inputstream input-stream
+   ^InputStream input-stream
    output-channel
    statistics]
-  (when (read-bytes statistics input-stream buffer MAVLINK2-HDR-SIZE)
+  (when (read-bytes statistics input-stream buffer (dec MAVLINK2-HDR-SIZE))
     ; now verify the header bytes
-    (let [low-byte (byte-to-long (.get buffer 7))
-	  middle-byte (byte-to-long (.get buffer 8))
-	  high-byte (byte-to-long (.get buffer 9))
+    (let [low-byte (byte-to-long (new Long (.get buffer 7)))
+	  middle-byte (byte-to-long (new Long (.get buffer 8)))
+	  high-byte (byte-to-long (new Long (.get buffer 9)))
 	  {:keys [messages-by-id]} mavlink
 	  msg-id (+ (bit-and (bit-shift-left high-byte 16) 0xff0000)
 		    (bit-and (bit-shift-left middle-byte 8) 0xff00)
 		    (bit-and low-byte 0xff))
-	  message-info (get messages-by-id message-id)
-	  msg-payload-size (byte-to-long (.get buffer 1))]
+	  message-info (get messages-by-id msg-id)
+	  msg-payload-size (byte-to-long (new Long (.get buffer 1)))]
       ; select and then return function to execute the next state
       (if (and message-info
 	       (<= msg-payload-size (:extension-payload-size message-info)))
@@ -642,35 +642,39 @@
    message-info - mavlink message information for message in buffer
    statistics - statistics
    "
-  [{:keys [encode-protocol] :as channel}
+  [{:keys [protocol] :as channel}
    ^ByteBuffer buffer
    payload-size
-   ^java.io.Inputstream input-stream
+   ^InputStream input-stream
    output-channel
    message
    message-info
    statistics]
   (let [bytes-to-read (+ payload-size 2)]
-    (when (read-bytes statistics input-stream buffer (+ payload-size 2))
+    (when (read-bytes statistics input-stream buffer bytes-to-read)
       (let [{:keys [crc-seed]} message-info]
 	(if (verify-checksum buffer
 			     (:crc-seed message-info) 
 			     (+ MAVLINK1-HDR-SIZE payload-size)) ; compute checksum LSB
-	  (when-not (= @encode-protocol :mavlink2-signed)
-	    (async/>!! output-channel
-	               (decode-mavlink1 message
-					message-info
-					buffer
-					statistics))
-	    (swap! statistics update-in [:bytes-decoded] #(+ % (MAVLINK1-HDR-SIZE bytes-to-read))))
-	  (swap! statistics update-in [:bad-checksums] inc))
-	; always return function to execute start-state
-	#(start-state channel buffer input-stream output-chanel statistics)))))
+	  (case @protocol
+            :mavlink1
+              (do
+                (async/>!! output-channel
+                           (decode-mavlink1 message
+                                            (:decode-fns message-info)
+                                            buffer
+                                            statistics))
+                (swap! statistics update-in [:bytes-decoded] #(+ % MAVLINK1-HDR-SIZE bytes-to-read)))
+            :mavlink2
+              (swap! statistics update-in [:bad-protocol] inc))
+	  (swap! statistics update-in [:bad-checksums] inc)))))
+  ; always return function to execute start-state
+  #(start-state channel buffer input-stream output-channel statistics))
 
 (defn- mavlink1-header-state
-  "Decode Mavlink 1 header state, get the Mavlink1 header bytes, then verify the
-   bytes are appropriate for a Mavlink1 header, and return the function to
-   execute next.
+  "Decode Mavlink 1 header state, get the Mavlink1 header bytes (remember the
+   start-byte has already been read), then verify the bytes are appropriate
+   for a Mavlink1 header, and return the function to execute next.
    When the stream is closed, just return nil which stops the decoding
    state machine.
    Header bytes are [start-byte
@@ -688,13 +692,13 @@
    "
   [{:keys [mavlink]  :as channel}
    ^ByteBuffer buffer
-   ^java.io.Inputstream input-stream
+   ^InputStream input-stream
    output-channel
   statistics]
-  (when (read-bytes statistics input-stream buffer MAVLINK1-HDR-SIZE)
+  (when (read-bytes statistics input-stream buffer (dec MAVLINK1-HDR-SIZE))
     ; now verify the header bytes
-    (let [msg-id (.get buffer 5)
-	  msg-payload-size (.get buffer 1)
+    (let [msg-id (byte-to-long (new Long (.get buffer 5)))
+	  msg-payload-size (byte-to-long (new Long (.get buffer 1)))
 	  {:keys [messages-by-id]} mavlink
 	  message-info (get messages-by-id msg-id)]
       ; select state to execute next and return function to execute the state
@@ -729,7 +733,7 @@
    "
   [{:keys [continue] :as channel}
    ^ByteBuffer buffer
-   ^java.io.Inputstream input-stream
+   ^InputStream input-stream
    output-channel
    statistics]
   (.clear buffer)
@@ -737,7 +741,7 @@
   (when (and @continue
              (read-bytes statistics input-stream buffer 1))
     ; return function to select and execute the next state
-    #(case (.get input-buffer 0)]
+    #(condp = (.get buffer 0)
        MAVLINK1-START-BYTE (mavlink1-header-state channel buffer
 			    input-stream output-channel statistics)
        MAVLINK2-START-BYTE (mavlink2-header-state channel buffer
@@ -802,14 +806,54 @@
    the following bindings:
      :statistics - the atom the encode/decode threads will update with 
                    encoding/decoding statistics
-     :close-channel - a function with no arguments to call to close the channel,
-                      in other words to stop the encoding/decoding threads.
+     :close-channel-fn - a function with no arguments to call to close
+                   the channel, in other words to stop the encoding/decoding
+                   threads.
+
+  A note about MAVlink message protocol.
+     Messages are (en/de)coded based on the current protocol and the value
+     of the secret-key.
   
+     If the protocol is :mavlink1 then messages are encoded MAVlink 1 and
+     all received messages are expected to be MAVlink 1, until a MAVlink 2
+     message is received. If the message is successfully decoded,
+     this will change the protocol to :mavlink2.
+
+     If the protocol is :mavlink2, then all messages will be encoded MAVlink 2.
+     Whether the message is signed or not is controlled by the secret key in the
+     signing options. If the key is not nil, the message is signed.
+
+     Once the secret key is set it is never cleared, and only updated when a signed
+     MAVlink 2 message's signature is successfully decrypted using a different key, then
+     the secret key is updated to the key used to decrypt the signature.
+
+     Thus, the MAVlink protocol is either :mavlink1, :mavlink2 without
+     signing (because the secret key is nil) or :mavlink2 with signing
+     (because the secret key is set). And the protocol can only move forward
+     through those 'states'. Thus the application can start using MAVlink 1
+     MAVlink 2 signed or unsigned by setting the procotol and secret-key.
+     Once running, the decoding process itself will update the protocol
+     based on the decoding process. 
+
+     The accept-message-handler provides a method for the application to indicate
+     whether or not to accept a message that is MAVlink 1 when the current protocol
+     is MAVlink 2. Or the message is unsigned when it should be signed. Of it
+     is signed and no key was found to decode it. The handler is called with
+     one argument, a message map with the following fields:
+                                      :message-id       - from the message
+                                      :sequence-id      - from the message
+                                      :system-id        - from the message
+                                      :component-id     - from the message
+                                      :current-protocol - :mavlink1 or :mavlink2
+                                      :signed-message   - true or false
+     The handler should return true if the message should be accepted,
+     false otherwise.
+
+     
    mavlink - is the mavlink map returned by a call to parse.
    options - is a hashmap of channel options
-     accept-unsigned-packets-handler- a function to all if unsigned pckets aren't accepted
-                                      and an unsigned packet comes in, this functio returns
-				      true or false if the packet should be accpeted.
+     accept-message-handler- a function to all to ask the application whether
+                             to accept a message that it would otherwise drop.
      component-id          - the encode component id
      decode-input-stream   - the stream to read bytes to decode from
      decode-output-channel - the channel to write decoded messages to
@@ -823,67 +867,26 @@
                              as the sole argument. 
      link-id               - the encode link id, if not given and protocol 
                              is :mavlink2, then 0 is used
-     decode-protocol       - the decode protocol to use
+     protocol              - the encode protocol to use
                              :mavlink1 - decode mavlink1 ignore mavlink2 messages
-			     :mavlink2-signed - decode mavlink2 using signing options
-			     :mavlink2-unsigned - decode mavlink2 accept signed
-			                          and unsigned packets
-			     :mavlink1-:mavlink2 - accept mavlink1 messages until a
-			                           mavlink2 message is received. When
-						   a mavlink2 message is recieved
-						 *** If it is unsigned, swap to protocol
-						   :mavlink2-unsigned for both decoding
-						   and encoding.
-						 *** If it is signed and a valid secret-key
-						   is found to decrypt the signature, update
-						   the signing-options to use this key for
-						   decoding and encoding; swap both the encode
-						   and decode protocols to :mavlink2-signed
-						 *** If it is signed and no valid secret-key
-						   is found to decrypt the signature, drop
-						   the message and don't change the protocol
-     encode-protocol       - the encode protocol to use
-                             :mavlink1 - start and remain Mavlink1 encoding
-			                 regardless of decoding
-			     :mavlink2-unsigned - start and stay Mavlink2 encoding;
-			                          don't sign the messages.
-			     :mavlink2-signed - start and stay Mavlink2 encoding;
-			                 If there is no secret-key in the signing-options,
-					 then encode unsigned.
-			     :mavlink1-:mavlink2 -
-			                 start encoding messages as Mavlink1.
-					 When a Mavlink2 message is decoded
-					 then swap encoding to match decoding
+			     :mavlink2 - decode mavlink2 using signing options
      signing-options {
-	 secret-key              - The current secret-key to use to encode/decode
+	 secret-key              - The current secret-key to use to encode, the
+                                   first key to try when decoding signed messages.
 			  	   The secret-key can be set on open-channel.
 			 	   When signed messages are decoded, the secret-key
 			 	   is set to the key that was used to validate the
 			 	   signature. If signed message cannot be validated
-			 	   with any keys, then the secret-key is set to
-			 	   nil and the encoded messages will still be Mavlink2,
-			 	   but they will not be signed.
+			 	   with any keys, then the secret-key is not updated.
 	 secret-keyset           - a sequable collection of valid keys
 				   while decoding, if the currnet secret-key fails to
 				   validate the message, all the keys will be tried in
 				   order. If no valid key is found the secret-key is not
 				   updated, if a valid key is found the secret-key is updated.
-         unsigned-packet-handler - a function to all if unsigned pckets aren't accepted
-                                   and an unsigned packet comes in, this functio returns
-				   true or false if the packet should be accpeted.
+         accept-message-handler - a function to all if the message header indicates
+                                   the message is not of the expected protocol.
          }
      system-id             - the encode system id
-
-   The decode function will decode messages based on the type of message, which is determined
-   by the message start byte 0xfe for MAVLink 1.0 and 0xfd for MAVLink 2.0.
-  
-   For MAVLink 2.0:
-     For decoding, if the incompat-flags indicate signing, then signing will be verified
-     (unless the :accept-unsigned-packets is set, in which case unsigned packets are accepted,)
-     FIXME MICHAEL - if the packet is signed, but this flag is set, do we verify any of the signature (e.g. the timestamp), verfy the signature, or ignore the signature? Current code is verifying the timestamp but not the encrypted signature bytes.
-     A system id, component id, and link id for each message decoded defines a signing
-     tuple. Each signing tuple has a timestamp associated with it. See verify-signing
-     for handling the decoded timestamps.
 
    For encodingMAVLink 2.0:
      The system-id and component-id are taken from the channel, but maybe
@@ -894,29 +897,25 @@
      anything earlier). So, the initial values of the encoding timestamp
      is 0. See the sign-packet function for timestamping for encoding.
    "
-  [mavlink {:keys [accept-unsigned-packets
-                   accept-unsigned-packets-handler
-                   component-id
+  [mavlink {:keys [component-id
                    decode-input-stream
 		   decode-output-channel
                    encode-input-channel
 		   encode-output-link
 		   exception-handler
 		   link-id
-                   decode-protocol
-                   encode-protocol
+                   protocol
 		   signing-options
                    system-id] :as options}]
   {:pre [(instance? Long system-id)
          (instance? Long component-id)
-         (instance? java.io.InputStream decode-input-stream)
-         (or (instance? java.io.OutputStream encode-output-link)
+         (instance? InputStream decode-input-stream)
+         (or (instance? OutputStream encode-output-link)
              encode-output-link)
          decode-output-channel
          encode-input-channel
          (map? mavlink)
-         (keyword? decode-protocol)
-         (keyword? encode-protocol)
+         (keyword? protocol)
          (map? (:messages-by-keyword mavlink))
          (map? (:messages-by-id mavlink))
          ]}
@@ -925,37 +924,40 @@
 	;; needed info in it's map try to get as much as possible into function call arguments
 	;; leave the rest in the internal channel map
         statistics (atom {:bytes-read 0
-			  :bytes-decoded
+			  :bytes-decoded 0
 			  :messages-decoded 0
 			  :messages-encoded 0
 			  :encode-failed 0
-			  :skipped-encode-sequences 0
+			  :decode-failed 0
 			  :bad-checksums 0
+			  :bad-protocol 0
 			  :bad-signatures 0
+			  :unsigned-messages 0
 			  :bad-timestamps 0
-			  :dropped-bad-mavlink2 0})
+			  :bad-mavlink2 0})
+        signing-options-map {:accept-message-handler (:accept-message-handler signing-options)
+                             :decode-sha256 (MessageDigest/getInstance "SHA-256")
+                             :secret-key (atom (:secret-key signing-options))
+                             :secret-keyset (:secret-keyset signing-options)
+                             :signing-tuples (atom {}) ; MAVLink 2.0 decoding only, decode timestamps
+                             }
 	continue (atom true)
-        channel {:accept-unsigned-packets (atom accept-unsigned-packets) ; MAVLink 2.0 decoding only
-	         :accept-unsigned-packets-handler accept-unsigned-packets-handler
-		 :component-id component-id
-		 :decode-sha256 (MessageDigest/getInstance "SHA-256")
+        channel {:component-id component-id
 		 :encode-timestamp (atom 0)           ; MAVLInk 2.0 encoding and decoding
-		 :link-id (or link-id 0)       ; MAVLink 2.0, encoding only
+		 :link-id (or link-id 0)              ; MAVLink 2.0, encoding only
 	         :mavlink mavlink		      ; returned by parse
-		 :decode-protocol (atom decode-protocol)
-		 :encode-protocol (atom encode-protocol)
+		 :protocol (atom protocol)
 	         :continue continue	              ; encode/decode thread continue flag
-		 :signing-options (atom signing-options)
-		 :signing-tuples (atom {})            ; MAVLink 2.0 decoding only, decode timestamps
+		 :signing-options signing-options-map
 		 :statistics statistics
 		 :system-id system-id
 		 }
         shutdown-fn (fn[e] ; This function can be called by the application
 			   ; or internally by the channel threads in case of an error
 			   ; or internally or when a thread's input source closes
-			   ; this function sets the shitdown flag to true; the threads
+			   ; this function sets the shutdown flag to true; the threads
 			   ; will stop when they poll the continue flag
-			   ; NOTE the applicatio is responsible for managing the input and
+			   ; NOTE the application is responsible for managing the input and
 			   ; output sources. Thus it is not enough to call the returned
 			   ; close function, the applicaiton must also close the input/output
 			   ; sources.
@@ -966,35 +968,40 @@
 		      (when e
                           (if exception-handler
                             (exception-handler e)
-                            (throw e)))))
-  ]
-     (.order buffer ByteOrder/LITTLE_ENDIAN)
+                            (throw e))))
+        ]
+    (.order buffer ByteOrder/LITTLE_ENDIAN)
 
-     (async/thread    ; decoding thread
-       (try
-         (trampoline start-state channel
-				 buffer
-				 decode-input-stream
-				 decode-output-channel
-				 statistics)
-	  (async/>!! decode-output-channel
-		     {:message-id :SigningTuples
-		      :signing-tuples (:signing-tuples channel)})
-	  (shutdown-fn nil)
+    (async/thread    ; decoding thread
+      (try
+        ; start the decoding state machine
+        (trampoline start-state channel
+                                buffer
+                                decode-input-stream
+                                decode-output-channel
+                                statistics)
+        ; output the state of the signing tuples
+	(async/>!! decode-output-channel
+                   {:message-id :SigningTuples
+                    :signing-tuples (:signing-tuples channel)})
+        ; shutdown the encode thread normally
+        (shutdown-fn nil)
         (catch Exception e (shutdown-fn (ex-info "clj-mavlink decode error"
 						 {:cause :decode}
 						 e)))))
 
-     (async/thread    ; encoding thread
-       (try
-         (encode-messages channel
-			  encode-input-channel
-			  encode-output-link)
-          (shutdown-fn nil)
+    (async/thread    ; encoding thread
+      (try
+        ; start encoding messages
+        (encode-messages channel
+                         encode-input-channel
+                         encode-output-link)
+        ; shutdown the decode thread normally
+        (shutdown-fn nil)
         (catch Exception e (shutdown-fn (ex-info "clj-mavlink encode error"
 						 {:cause :encode}
 						 e)))))
 
-     ; Return a map holding the statistics atom and the close-channel function
-     {:statistics statistics
-      :close-channel #(shutdown-fn nil)}))
+    ; Return a map holding the statistics atom and the close-channel function
+    {:statistics statistics
+     :close-channel-fn #(shutdown-fn nil)}))
