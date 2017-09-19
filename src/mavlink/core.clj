@@ -168,7 +168,7 @@
                                   MAVLINK2-HDR-CRC-SIGN-SIZE
                                   MAVLINK2-HDR-CRC-SIZE)))]
       (aset-byte packed 0 MAVLINK2-START-BYTE)
-      (aset-byte packed 1 (byte-to-long (.byteValue (new Long trimmed-payload-size))))
+      (aset-byte packed 1 (.byteValue (new Long trimmed-payload-size)))
       (aset-byte packed 2 (.byteValue (new Long incompat-flags)))
       (aset-byte packed 3 (.byteValue (new Long compat-flags)))
       (aset-byte packed 4 (.byteValue (new Long ^long sequence-id)))
@@ -241,10 +241,14 @@
 	      (if-let [seq-id- (:sequence-id message)]
 		 (vreset! sequence-id (mod seq-id- 256))
 		 (vswap! sequence-id #(mod (inc %) 256)))
-	      (if-let [packed (case (or (:mavlinkProtocol message)
+	      (if-let [packed (case (or (:mavlink-protocol message)
 				        @protocol)
 				  :mavlink1
-				    (encode-mavlink1 channel @sequence-id message message-info)
+                                    (if (>= (:msg-id message-info) 256)
+                                      (do
+                                        (swap! statistics update-in [:bad-protocol] inc)
+                                        nil)
+                                      (encode-mavlink1 channel @sequence-id message message-info))
 				  :mavlink2
 				    (encode-mavlink2 channel @sequence-id
 						     @secret-key encode-sha256
@@ -306,14 +310,13 @@
    buffer - the buffer to decode
    msg-payload-sie - the payload size of the message
    statistics - the statistics atom
-   signed-message - whether the message was signed
    "
   [message
    message-info
    ^ByteBuffer buffer
    msg-payload-size
    statistics
-   signed-message]
+   ]
   (let [{:keys [extension-payload-size msg-key decode-fns extension-decode-fns]} message-info]
     ; position the buffer to the end of the payload
     (.position buffer (+ MAVLINK2-HDR-SIZE msg-payload-size))
@@ -325,8 +328,7 @@
     (.position buffer MAVLINK2-HDR-SIZE)
     ; decode the message, and return it!
     (let [message (persistent! (reduce (fn [message decode-fn] (decode-fn buffer message))
-				       (transient (assoc! message :mavlink-signed-message
-						                  signed-message))
+				       (transient message)
                                        (concat decode-fns extension-decode-fns)))]
       (swap! statistics update-in [:messages-decoded] inc)
       message)))
@@ -504,7 +506,7 @@
    message-info - mavlink message information for message in buffer
    statistics - statistics
    "
-  [{:keys [accept-message-handler encode-timestamp signing-options protocol] :as channel}
+  [{:keys [encode-timestamp signing-options protocol] :as channel}
    ^ByteBuffer buffer
    payload-size
    ^InputStream input-stream
@@ -512,9 +514,22 @@
    message
    message-info
    statistics]
-  (let [{:keys [decode-sha256 secret-key secret-keyset signing-tuples]} signing-options
+  (let [{:keys [accept-message-handler decode-sha256 secret-key
+                secret-keyset signing-tuples]} signing-options
         signed-message (not (zero? (bit-and (.get buffer 2) INCOMPAT-FLAG-SIGNED)))
-	signature-verified (when signed-message
+        bytes-to-read (if signed-message
+			; read payload, CRC, and the signature
+	                (+ payload-size 2 MAVLINK2-SIGN-SIZE)
+			; read only the payload and CRC
+	                (+ payload-size 2))
+        bytes-in-message (+ MAVLINK2-HDR-SIZE bytes-to-read)
+        ]
+    (when (read-bytes statistics input-stream buffer bytes-to-read)
+
+      (if (verify-checksum buffer
+			   (:crc-seed message-info)
+			   (+ MAVLINK2-HDR-SIZE payload-size))  ; compute the checksum LSB
+	(let [signature-verified (when signed-message
                              ; verify-signature counts bad signatures,
                              ; updates the secret-key if it changes, and
                              ; returns whether the signature verified
@@ -529,18 +544,7 @@
                                    (accept-message-handler (assoc message
                                                                  :signed-message signed-message
                                                                  :current-protocol @protocol)))))
-        bytes-to-read (if signed-message
-			; read payload, CRC, and the signature
-	                (+ payload-size 2 MAVLINK2-SIGN-SIZE)
-			; read only the payload and CRC
-	                (+ payload-size 2))
-        bytes-in-message (+ MAVLINK2-HDR-SIZE bytes-to-read)
-        ]
-    (when (read-bytes statistics input-stream buffer bytes-to-read)
-      (if (verify-checksum buffer
-			   (:crc-seed message-info)
-			   (+ MAVLINK2-HDR-SIZE payload-size))  ; compute the checksum LSB
-        (let [okay-to-decode (case @protocol
+              okay-to-decode (case @protocol
                                :mavlink1
                                  (when (or (not signed-message)
                                            (and signed-message
@@ -557,12 +561,11 @@
           ; if okay to decode
           (when okay-to-decode
             ; okay to decode, decode the message
-            (if-let [message (decode-mavlink2 message
+            (if-let [message (decode-mavlink2 (assoc message :signed-message signed-message)
                                               message-info
                                               buffer
                                               payload-size
-                                              statistics
-                                              signed-message)]
+                                              statistics)]
                 (do
                   (swap! statistics update-in [:bytes-decoded] #(+ bytes-in-message %))
                   (async/>!! output-channel message))

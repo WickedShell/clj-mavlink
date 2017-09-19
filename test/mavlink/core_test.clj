@@ -1,10 +1,12 @@
 (ns mavlink.core-test
   (:require [clojure.test :refer :all]
             [clojure.java.io :as io]
+            [clojure.core.async :as async]
             [mavlink.checksum :refer :all]
             [mavlink.core :refer :all]
             [mavlink.type :refer :all])
   (:import [com.mavlink CRC]
+           [java.io PipedInputStream PipedOutputStream]
            [java.nio ByteBuffer ByteOrder]))
 
 (use 'clojure.pprint)
@@ -20,7 +22,7 @@
    If the length is given, then generate a full array of test values."
   ([type-key i]
     (condp = type-key
-      :char     (char (+ (byte \A) i))
+      :char     (char (+ (byte \A) (mod i 26)))
       :int8_t   (bit-and 0xff (+ 5 i))
       :uint8_t  (bit-and 0xff (+ 5 i))
       :uint8_t_mavlink_version  3
@@ -60,16 +62,38 @@
        (.update-checksum crc crc-seed))
      (.crcValue crc))))
 
-(defn encode-test
-  "Given a message map, encode it then get the decoded and round robin it back to the encode."
+(defn mk-pipe
+  []
+  (let [pipe-in (PipedInputStream.)
+        pipe-out (PipedOutputStream. pipe-in)]
+    {:pipe-in pipe-in
+     :pipe-out pipe-out}))
+
+(def decode-input-pipe (mk-pipe))
+(def decode-output-channel (async/chan 300))
+(def encode-input-channel  (async/chan 300))
+(def encode-output-channel (async/chan 300))
+
+(def secret-keyset [(bytes (byte-array (map (comp byte int) "000000abcdefghijklmnopqrstuvwxyz")))
+                    (bytes (byte-array (map (comp byte int) "abcdefghijklmnopqrstuvwxyz123456")))])
+(defn encode-oneway
+  "Given a message map, encode it. Bute don't poll for the result because
+   an error is expected."
   [message]
-  (async/go
-    (async/>! encode-input-channel message)
-    (let [decoded-message (async/<!! decode-output-channel)]
-      (doseq [field (keys message)]
-        (is (not= (field message) (field decoded-message))
-          (str field " field in " (:field message) ", field out " (field decoded-message)))))))
-  
+  (async/>!! encode-input-channel message))
+
+(defn encode-roundtrip
+  "Given a message map, encode it then get the decoded and round robin it back to the encode
+   and compare the result."
+  [message]
+  (async/>!! encode-input-channel message)
+  (when-let [message-bytes (async/<!! encode-output-channel)]
+    ; (println "The encoded bytes:")
+    ; (doseq [b message-bytes] (print (str (bit-and 0xff b) " "))) (println)
+    (.write ^PipedOutputStream (:pipe-out decode-input-pipe) message-bytes 0 (count message-bytes))
+    (async/<!! decode-output-channel)))
+
+
 (def mavlink (parse {:xml-sources [{:xml-file "test-include.xml"
                                     :xml-source (-> "test/resources/test-include.xml" io/input-stream)}
                                    {:xml-file "common.xml"
@@ -79,22 +103,33 @@
                                   ]
                      :descriptions true}))
 
-(def channel (open-channel mavlink {:protocol :mavlink1
-                                    :system-id 99
-                                    :component-id 88}))
-
 (def mavlink-2 (parse {:xml-sources [{:xml-file "ardupilotmega.xml"
                                       :xml-source (-> "test/resources/ardupilotmega.xml" io/input-stream)}
                                      {:xml-file "common.xml"
                                       :xml-source (-> "test/resources/common.xml" io/input-stream)}
                                      {:xml-file "uAvionix.xml"
                                       :xml-source (-> "test/resources/uAvionix.xml" io/input-stream)}]}))
-(def channel-2 (open-channel mavlink-2 {:protocol :mavlink2
-                                        :system-id 99
-                                        :component-id 88}))
+
+(def channel  (open-channel mavlink-2 {:protocol :mavlink1
+                                     :system-id 99
+                                     :component-id 88
+                                     :link-id 77
+                                     :decode-input-stream (:pipe-in decode-input-pipe)
+                                     :decode-output-channel decode-output-channel
+                                     :encode-input-channel encode-input-channel
+                                     :encode-output-link encode-output-channel
+                                     :exception-handler #(println "clj-mavlink/test exception:\n" %1)
+                                     :signing-options {:secret-key (get secret-keyset 0)
+                                                       :secret-keyset secret-keyset
+                                                       :accept-message-handler
+                                                              #(do
+                                                                (println "clj-mavlink/accept-message:\n" %1)
+                                                                true)
+                                                       }}))
 
 (defn get-test-message 
-  "Given a message's specification map, generate a test message-map for it."
+  "Given a message's specification map, generate a test message-map for it.
+   NOTE uses mavlink-2!!!!!"
   [{:keys [msg-key fields] :as message-spec}]
   {:pre [msg-key
          (not (empty? fields))]}
@@ -102,7 +137,7 @@
          (apply merge (map #(let [{:keys [name-key type-key enum-type length]} %
                                   value (get-test-value type-key  5 length)]
                               {name-key (if enum-type
-                                          (get (enum-type (:enums-by-group mavlink))
+                                          (get (enum-type (:enums-by-group mavlink-2))
                                                value value)
                                           value)})
                            fields))))
@@ -165,48 +200,12 @@
                 (read-fn buffer))
             (str "roundtrip data write-read for " type-key " failed."))))))
 
-(deftest include-parse
-  (testing "Testing multi file include."
-    (is (== (:system-id channel) 99)
-        "Include test system id set failed.")
-    (is (not (nil? (:uavionix-adsb-out-cfg (:messages-by-keyword (:mavlink channel)))))
-        "Include from uAvionix.xml failed.")
-    (is (not (nil? (:heartbeat (:messages-by-keyword (:mavlink channel)))))
-        "Include from common.xml fialed.")
-    (is (not (nil? (:sensor-offsets (:messages-by-keyword (:mavlink channel)))))
-        "Include from ardupilotmega.xml failed."))
-  (testing "For valid message checksums."
-    (is (== (-> mavlink :messages-by-keyword :heartbeat :crc-seed) 50)
-        "Hearbeat magic byte checksum.")
-    (is (== (-> mavlink :messages-by-keyword :sys-status :crc-seed) 124)
-        "Sys Status magic byte checksum.")
-    (is (== (-> mavlink :messages-by-keyword :change-operator-control :crc-seed) 217)
-        "Change Operator Control magic byte checksum.")
-    (is (== (-> mavlink :messages-by-keyword :param-set :crc-seed) 168)
-        "Param Set magic byte checksum.")
-    (is (== (-> mavlink :messages-by-keyword :ping :crc-seed) 237)
-        "output Raw magic byte checksum.")
-    (is (== (-> mavlink :messages-by-keyword :servo-output-raw :crc-seed) 222)
-        "output Raw magic byte checksum."))
-  (testing "Message round trips."
-    (doseq [id (range 255)]
-      (when-let [msg-info (get (:messages-by-id (:mavlink channel)) id)]
-        (let [message (get-test-message msg-info)
-              encoded (encode channel message)
-              decoded (dissoc (first (decode-bytes channel encoded))
-                              :sequence-id :system-id :component-id)]
-          (encode-test message))))))
-
 (deftest simple-parser-test
   (testing "Testing Simple parsing of enums."
     (let [mavlink-simple (parse
                         {:xml-sources [{:xml-file "test-parse.xml"
                                         :xml-source (-> "test/resources/test-parse.xml" io/input-stream)}]
-                         :descriptions true})
-          channel-simple (open-channel mavlink-simple {:protocol :mavlink1
-                                                       :system-id 99
-                                                       :component-id 88})]
-      ;(pprint channel-simple)
+                         :descriptions true})]
       (is (thrown-with-msg? Exception #"Enum values conflict" 
                   (parse
                     {:xml-sources [{:xml-file "common.xml"
@@ -214,9 +213,9 @@
                                    {:xml-file "test-parse.xml"
                                     :xml-source (-> "test/resources/test-parse.xml" io/input-stream)}]
                      :descriptions true})))
-      (is (thrown-with-msg? Exception #"Unable to translate enum"
-                   (encode channel-simple {:message-id :heartbeat :type :dummy-enum})))
-      (is (= (:enum-to-value (:mavlink channel-simple))
+      ;(is (thrown-with-msg? Exception #"Unable to translate enum"
+      ;             (encode channel-simple {:message-id :heartbeat :type :dummy-enum})))
+      (is (= (:enum-to-value mavlink-simple)
              {:mav-autopilot-generic 0,
               :mav-autopilot-reserved 1,
               :mav-autopilot-slugs 2,
@@ -244,7 +243,7 @@
               :mav-test-ten 10
               :mav-test-eleven 11})
           "Enum-to-value test failed.")
-      (is (= (:enums-by-group (:mavlink channel-simple))
+      (is (= (:enums-by-group mavlink-simple)
              {:mav-test {5 :mav-test-five,
                          6 :mav-test-six,
                          10 :mav-test-ten
@@ -272,369 +271,89 @@
                           6 :mav-state-emergency,
                           7 :mav-state-poweroff}})
           "Enum-by-group test failed")
-      (is (= (get (:mav-autopilot (:enums-by-group (:mavlink channel-simple))) 1) :mav-autopilot-reserved)
+      (is (= (get (:mav-autopilot (:enums-by-group mavlink-simple)) 1) :mav-autopilot-reserved)
           "Fetching of enum by its value from enums-by-group failed.")
-      (is (= (:fld-name (get (:fields (:heartbeat (:messages-by-keyword (:mavlink channel-simple)))) 3))
+      (is (= (:fld-name (get (:fields (:heartbeat (:messages-by-keyword mavlink-simple))) 3))
                "base_mode")
           "Fetching type of base-mode from heartbeat messages-by-keyword failed.")
-      (is (= (:msg-id (:gps-status (:messages-by-keyword (:mavlink channel-simple)))) 25)
+      (is (= (:msg-id (:gps-status (:messages-by-keyword mavlink-simple))) 25)
           "Fetching id of message from messages-by-keyword failed")
-      (is (= (:msg-id (get (:messages-by-id (:mavlink channel-simple)) 25)) 25)
+      (is (= (:msg-id (get (:messages-by-id mavlink-simple) 25)) 25)
           "Fetching id of message from messages-by-id failed")
-      (is (not (nil? (:mav-autopilot (:descriptions (:mavlink channel-simple)))))
+      (is (not (nil? (:mav-autopilot (:descriptions mavlink-simple))))
           "Failed to find description")
       )))
 
-(deftest ardupilot.xml
-  (testing "Testing Ardupilot Messages."
-    (let [mavlink-complex (parse
-                        {:xml-sources [{:xml-file "ardupilotmega.xml"
-                                        :xml-source (-> "test/resources/ardupilotmega.xml" io/input-stream)}
-                                       {:xml-file "common.xml"
-                                        :xml-source (-> "test/resources/common.xml" io/input-stream)}
-                                       {:xml-file "uAvionix.xml"
-                                        :xml-source (-> "test/resources/uAvionix.xml" io/input-stream)}]
-                         })
-          channel-complex (open-channel mavlink-complex {:protocol :mavlink1
-                                                         :system-id 99
-                                                         :component-id 88})
-          simple-message (do
-                           ;(is (nil? (decode-byte-mavlink1 channel-complex (.byteValue (Long/valueOf "fe" 16)))))
-                           ;(is (nil? (decode-byte-mavlink1 channel-complex (byte 3))))
-                           ;(is (nil? (decode-byte-mavlink1 channel-complex (.byteValue (Long/valueOf "e3" 16)))))
-                           ;(is (nil? (decode-byte-mavlink1 channel-complex (byte 1))))
-                           ;(is (nil? (decode-byte-mavlink1 channel-complex (byte 1))))
-                           ;(is (nil? (decode-byte-mavlink1 channel-complex (.byteValue (Long/valueOf "a5" 16)))))
-                           ;(is (nil? (decode-byte-mavlink1 channel-complex (.byteValue (Long/valueOf "d0" 16)))))
-                           ;(is (nil? (decode-byte-mavlink1 channel-complex (byte 18))))
-                           ;(is (nil? (decode-byte-mavlink1 channel-complex (byte 0))))
-                           ;(is (nil? (decode-byte-mavlink1 channel-complex (.byteValue (Long/valueOf "3b" 16)))))
-                           ;(decode-byte-mavlink1 channel-complex (.byteValue (Long/valueOf "d2" 16))))
-                           (is (nil? (decode-byte channel-complex (.byteValue (Long/valueOf "fe" 16)))))
-                           (is (nil? (decode-byte channel-complex (byte 3))))
-                           (is (nil? (decode-byte channel-complex (.byteValue (Long/valueOf "e3" 16)))))
-                           (is (nil? (decode-byte channel-complex (byte 1))))
-                           (is (nil? (decode-byte channel-complex (byte 1))))
-                           (is (nil? (decode-byte channel-complex (.byteValue (Long/valueOf "a5" 16)))))
-                           (is (nil? (decode-byte channel-complex (.byteValue (Long/valueOf "d0" 16)))))
-                           (is (nil? (decode-byte channel-complex (byte 18))))
-                           (is (nil? (decode-byte channel-complex (byte 0))))
-                           (is (nil? (decode-byte channel-complex (.byteValue (Long/valueOf "3b" 16)))))
-                           (decode-byte channel-complex (.byteValue (Long/valueOf "d2" 16))))
-          decoded (first (decode-bytes channel-complex (encode channel-complex {:message-id :heartbeat :type :mav-type-helicopter
-                                                          :autopilot :mav-autopilot-ardupilotmega
-                                                          :base_mode :mav-mode-auto-armed
-                                                          :system_status :mav-state-poweroff})))
-          ; the following tests two header decoding errors, the first is that the message id is wrong,
-          ; then there is another spurious start byte if the following message decodes, which it should then
-          ; we're good.
-          bad-message (is (empty? (decode-bytes channel-complex (mkbytes "fe 49 e0 1 1 03 0 0 0 fe 93 2 63 0 49 4e 49 54 49 41 4c 5f 4d 4f 44 45 0 0 0 0 2 bb 4c")))
-                          "Bad message id, entire message should be eaten.")
-          multi-message (decode-bytes channel-complex (mkbytes "fe 19 e0 1 1 16 0 0 0 0 93 2 63 0 49 4e 49 54 49 41 4c 5f 4d 4f 44 45 0 0 0 0 2 bb 4c fe 19 e1 1 1 16 0 c0 5a 45 93 2 64 0 4c 49 4d 5f 52 4f 4c 4c 5f 43 44 0 0 0 0 0 4 79 73 fe 1c e2 1 1 a3 43 50 ba b9 3d 7e 23 bb 35 2d e2 3a 0 0 0 0 0 0 0 0 e0 51 ce 3a 70 6e 2 3b 9c 21"))
-          three-part-message (do
-                               (is (empty? (decode-bytes channel-complex (mkbytes "fe 1c e2 1 1 a3 43 50 ba b9"))))
-                               (is (empty? (decode-bytes channel-complex (mkbytes "3d 7e 23 bb 35 2d e2 3a 0 0 0"))))
-                               (decode-bytes channel-complex (mkbytes "0 0 0 0 0 e0 51 ce 3a 70 6e 2 3b 9c 21 fe 9 7 ff be")))
-          partial-message (decode-bytes channel-complex (mkbytes "0 0 0 0 0 6 8 0 0 0 c7 18"))
-          ]
-    (comment
-      (println "Multi message :")
-      (pprint multi-message)
-      (println "Simple message :")
-      (pprint simple-message)
-      (println "Three part message :")
-      (pprint three-part-message)
-      (println "Partial message :")
-      (pprint partial-message)
+(deftest mavlink
+  (testing "Testing multi file include."
+    (is (not (nil? (:uavionix-adsb-out-cfg (:messages-by-keyword mavlink-2))))
+        "Include from uAvionix.xml failed.")
+    (is (not (nil? (:heartbeat (:messages-by-keyword mavlink-2))))
+        "Include from common.xml fialed.")
+    (is (not (nil? (:sensor-offsets (:messages-by-keyword mavlink-2))))
+        "Include from ardupilotmega.xml failed."))
+  (testing "For valid message checksums."
+    (is (== (-> mavlink-2 :messages-by-keyword :heartbeat :crc-seed) 50)
+        "Hearbeat magic byte checksum.")
+    (is (== (-> mavlink-2 :messages-by-keyword :sys-status :crc-seed) 124)
+        "Sys Status magic byte checksum.")
+    (is (== (-> mavlink-2 :messages-by-keyword :change-operator-control :crc-seed) 217)
+        "Change Operator Control magic byte checksum.")
+    (is (== (-> mavlink-2 :messages-by-keyword :param-set :crc-seed) 168)
+        "Param Set magic byte checksum.")
+    (is (== (-> mavlink-2 :messages-by-keyword :ping :crc-seed) 237)
+        "output Raw magic byte checksum.")
+    (is (== (-> mavlink-2 :messages-by-keyword :servo-output-raw :crc-seed) 222)
+        "output Raw magic byte checksum."))
+  (testing "Message round trips."
+    (doseq [id (range 255)]
+      (when-let [msg-info (get (:messages-by-id mavlink-2) id)]
+        (let [message (get-test-message msg-info)
+              decoded-message (encode-roundtrip message)]
+          (println (str "-- Testing message " (:message-id message))) ; " :: " message))
+          (doseq [field (keys message)
+                  :let [result (if (number? (field message))
+                                 (when (number? (field decoded-message))
+                                   (== (field message) (field decoded-message)))
+                                 (= (field message) (field decoded-message)))]]
+            (is result
+              (str "message " (:message-id message) " field " field
+                   " failed: " (field message) " -> " (field decoded-message))))))))
+  (testing "automatic protocol change from MAVlink 1 to MAVlink 2"
+    (let [statistics (:statistics channel)]
+      (encode-oneway {:message-id :device-op-read})
+      (Thread/sleep 1) ; give the encode a thread an opportunity to run
+      (is (== 1 (:bad-protocol @statistics))
+          "MAVlink 2 only message should fail to encode due to bad protocol")
+      (let [decoded-message (encode-roundtrip {:message-id :heartbeat :mavlink-protocol :mavlink2})]
+        (is decoded-message
+            "Failed to send MAVlink 2 heartbeat"))
+      (let [decoded-message (encode-roundtrip {:message-id :device-op-read})]
+        (is decoded-message
+          "Failed to send MAVlink 2 only test message"))
+      (is (== 1 (:bad-protocol @(:statistics channel)))
+          "Second attempt to send MAVlink 2 only message should pass.")
+      )
     )
-      (is (= (decode-bytes channel-complex (mkbytes "20 10 30 40 50 fe 19 e0 1 1 16 0 0 0 0 93 2 63 0 49 4e 49 54 49 41 4c 5f 4d 4f 44 45 0 0 0 0 2 bb 4c"))
-            [{:message-id :param-value
-              :sequence-id 224
-              :system-id 1
-              :component-id 1
-              :param_value 0.0
-              :param_count 659
-              :param_index 99
-              :param_id "INITIAL_MODE"
-              :param_type :mav-param-type-int8}])
-          "Leading garbage bytes.")
-      (is (nil? (:mav-autopilot (:descriptions channel-complex)))
-          "Should not be a description")
-      (is (= (:type decoded) :mav-type-helicopter)
-          "Heartbeat type failed")
-      (is (= (:autopilot decoded) :mav-autopilot-ardupilotmega)
-          "Heartbeat autopilot failed")
-      (is (= (:base_mode decoded) 220)
-          "Heartbeat base_mode failed")
-      (is (= (:system_status decoded) :mav-state-poweroff)
-          "Heartbeat system_status failed")
-      (is (= (count multi-message) 3)
-          "Decode multiple messages failed")
-      (is (= "INITIAL_MODE" (:param_id (get multi-message 0)))
-          "Decode param_id from multi-message [0] failed")
-      (is (= 659 (:param_count (get multi-message 1)))
-          "Decode param_count from multi-message [1] failed")
-      (is (== 0.0 (:accel_weight (get multi-message 2)))
-          "Decode accel_weight from multi-message [2] failed")
-      (is (= {:message-id :hwstatus :sequence-id 227 :system-id 1 :component-id 1 :Vcc 4816 :I2Cerr 0}
-             simple-message)
-          "Decode simple-message (decoded a byte at a time failed")
-      (is (= (str (:omegaIz (first three-part-message))) (str 0.0017255904)))
-      (is (= (:message-id (first three-part-message)) :ahrs))
-      (is (= (str (:omegaIx (first three-part-message))) (str -3.5536484E-4)))
-      (is (= (str (:error_yaw (first three-part-message))) (str 0.0019902252)))
-      (is (= (:sequence-id (first three-part-message)) 226))
-      (is (= (str (:accel_weight (first three-part-message))) (str 0.0)))
-      (is (= (str (:error_rp (first three-part-message))) (str 0.0015740953)))
-      (is (= (str (:renorm_val (first three-part-message))) (str 0.0)))
-      (is (= (:component-id (first three-part-message)) 1))
-      (is (= (str (:omegaIy (first three-part-message))) (str -0.002494707)))
-      (is (= (:system-id (first three-part-message)) 1))
-      (is (thrown-with-msg? Exception #"Unable to translate enum"
-          (encode channel-complex {:message-id :heartbeat :type :not-an-enum})))
-      (is (= (:satellite_prn (first (decode-bytes channel-complex (encode channel-complex {:message-id :gps-status :satellite_prn [1 2 3 4 5]}))))
-             [1 2 3 4 5 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]))
-      (is (= {:message-id :heartbeat
-              :autopilot :mav-autopilot-invalid
-              :base_mode 0
-              :custom_mode 0
-              :type :mav-type-gcs
-              :sequence-id 7
-              :system_status :mav-state-uninit
-              :mavlink_version 0
-              :component-id 190
-              :system-id 255}
-             (first partial-message))
-          "Decode of message in two parts failed.")
-        )))
+  (testing "Roundtrip of all messages."
+    (println (str "There are " (count (vals (:messages-by-id mavlink-2))) " messages."))
+    (doseq [msg-info (vals (:messages-by-id mavlink-2))]
+        (let [message (get-test-message msg-info)
+              decoded-message (encode-roundtrip message)]
+          (println (str "-- Testing message " (:message-id message) " :: " message))
+          ; (pprint decoded-message)
+          (doseq [field (keys message)
+                  :let [result (if (number? (field message))
+                                 (when (number? (field decoded-message))
+                                   (== (field message) (field decoded-message)))
+                                 (= (field message) (field decoded-message)))]]
+            (is result
+              (str "message " (:message-id message) " field " field
+                   " failed: " (field message) " -> " (field decoded-message)))))))
 
-(deftest mavlink2
-  (testing "Testing MAVLink 2.0 with extension but no signature; also testing auto sequence numbering"
-    (let [bs-empty (encode channel-2 {:message-id :meminfo })
-          bs-1 (encode channel-2 {:message-id :meminfo :brkval 44})
-          bs-2 (encode channel-2 {:message-id :meminfo :freemem 33})
-          bs-3 (encode channel-2 {:message-id :meminfo :freemem32 66})
-          bs-all (encode channel-2 {:message-id :meminfo :freemem32 66 :brkval 44 :freemem 33})]
-      (is (= [{:message-id :meminfo, :sequence-id 1, :system-id 99, :component-id 88, :link-id nil, :brkval 0, :freemem 0, :freemem32 0}]
-             (decode-bytes channel-2 bs-empty)))
-      (is (= [{:message-id :meminfo, :sequence-id 2, :system-id 99, :component-id 88, :link-id nil, :brkval 44, :freemem 0, :freemem32 0}]
-             (decode-bytes channel-2 bs-1)))
-      (is (= [{:message-id :meminfo, :sequence-id 3, :system-id 99, :component-id 88, :link-id nil, :brkval 0, :freemem 33, :freemem32 0}]
-             (decode-bytes channel-2 bs-2)))
-      (is (= [{:message-id :meminfo, :sequence-id 4, :system-id 99, :component-id 88, :link-id nil, :brkval 0, :freemem 0, :freemem32 66}]
-             (decode-bytes channel-2 bs-3)))
-      (is (= [{:message-id :meminfo, :sequence-id 5, :system-id 99, :component-id 88, :link-id nil, :brkval 44, :freemem 33, :freemem32 66}]
-             (decode-bytes channel-2 bs-all)))
-      ))
-  (testing "Testing MAVLink 2.0 with extension but no signature."
-    (let [bs-empty (encode channel-2 {:message-id :optical-flow :sequence-id 1 })
-          bs-1 (encode channel-2 {:message-id :optical-flow :time_usec 444444})
-          bs-2 (encode channel-2 {:message-id :optical-flow :flow_comp_m_x 3333.33})
-          bs-3 (encode channel-2 {:message-id :optical-flow :flow_rate_x 22.25})
-          bs-4 (encode channel-2 {:message-id :optical-flow :flow_rate_x 22.25 :flow_rate_y 55.25})
-          bs-5 (encode channel-2 {:message-id :optical-flow :time_usec 444444 :flow_rate_x 22.25 :flow_rate_y 55.25})
-          bs-6 (encode channel-2 {:message-id :optical-flow :time_usec 444444 :sensor_id 16 :flow_rate_x 22.25 :flow_rate_y 55.25})
-          bs-7 (encode channel-2 {:message-id :optical-flow :time_usec 444444 :flow_x 1234 :sensor_id 16 :flow_rate_x 22.25 :flow_rate_y 55.25})
-          bs-8 (encode channel-2 {:message-id :optical-flow :time_usec 444444 :flow_y 4321 :sensor_id 16 :flow_rate_x 22.25 :flow_rate_y 55.25})
-          bs-9 (encode channel-2 {:message-id :optical-flow :quality 55 :time_usec 444444 :flow_y 4321 :sensor_id 16 :flow_rate_x 22.25 :flow_rate_y 55.25})
-          bs-all (encode channel-2 {:message-id :optical-flow :ground_distance 123.456 :quality 55 :time_usec 444444 :flow_y 4321 :sensor_id 16 :flow_rate_x 22.25 :flow_rate_y 55.25})]
-      (is (= [{:message-id :optical-flow, :sequence-id 1, :system-id 99, :component-id 88, :link-id nil, :time_usec 0N :sensor_id 0 :flow_x 0 :flow_y 0 :flow_comp_m_x 0.0 :flow_comp_m_y 0.0 :quality 0 :ground_distance 0.0 :flow_rate_y 0.0 :flow_rate_x 0.0}]
-               (decode-bytes channel-2 bs-empty)))
-      (is (= [{:message-id :optical-flow, :sequence-id 2, :system-id 99, :component-id 88, :link-id nil, :time_usec 444444N :sensor_id 0 :flow_x 0 :flow_y 0 :flow_comp_m_x 0.0 :flow_comp_m_y 0.0 :quality 0 :ground_distance 0.0 :flow_rate_y 0.0 :flow_rate_x 0.0}]
-               (decode-bytes channel-2 bs-1)))
-      (is (Float/compare (float 3333.33) (:flow_comp_m_x (first (decode-bytes channel-2 bs-2)))))
-      (is (Float/compare (float 22.25) (:flow_rate_x (first (decode-bytes channel-2 bs-4)))))
-      (is (Float/compare (float 55.25) (:flow_rate_y (first (decode-bytes channel-2 bs-4)))))
-      (is (Float/compare (float 22.25) (:flow_rate_x (first (decode-bytes channel-2 bs-5)))))
-      (is (= 444444 (:time_usec (first (decode-bytes channel-2 bs-5)))))
-      (is (Float/compare (float 55.25) (:flow_rate_y (first (decode-bytes channel-2 bs-6)))))
-      (is (Float/compare (float 22.25) (:flow_rate_x (first (decode-bytes channel-2 bs-6)))))
-      (is (= 444444 (:time_usec (first (decode-bytes channel-2 bs-6)))))
-      (is (= 16 (:sensor_id (first (decode-bytes channel-2 bs-6)))))
-      (is (Float/compare (float 55.25) (:flow_rate_y (first (decode-bytes channel-2 bs-7)))))
-      (is (Float/compare (float 22.25) (:flow_rate_x (first (decode-bytes channel-2 bs-7)))))
-      (is (= 444444 (:time_usec (first (decode-bytes channel-2 bs-7)))))
-      (is (= 16 (:sensor_id (first (decode-bytes channel-2 bs-7)))))
-      (is (= 1234 (:flow_x (first (decode-bytes channel-2 bs-7)))))
-      (is (Float/compare (float 55.25) (:flow_rate_y (first (decode-bytes channel-2 bs-8)))))
-      (is (Float/compare (float 22.25) (:flow_rate_x (first (decode-bytes channel-2 bs-8)))))
-      (is (= 444444 (:time_usec (first (decode-bytes channel-2 bs-8)))))
-      (is (= 16 (:sensor_id (first (decode-bytes channel-2 bs-8)))))
-      (is (= 4321 (:flow_y (first (decode-bytes channel-2 bs-8)))))
-      (is (Float/compare (float 55.25) (:flow_rate_y (first (decode-bytes channel-2 bs-9)))))
-      (is (Float/compare (float 22.25) (:flow_rate_x (first (decode-bytes channel-2 bs-9)))))
-      (is (= 444444 (:time_usec (first (decode-bytes channel-2 bs-9)))))
-      (is (= 16 (:sensor_id (first (decode-bytes channel-2 bs-9)))))
-      (is (= 55 (:quality (first (decode-bytes channel-2 bs-9)))))
-      (is (= 4321 (:flow_y (first (decode-bytes channel-2 bs-9)))))
-      (is (Float/compare (float 55.25) (:flow_rate_y (first (decode-bytes channel-2 bs-all)))))
-      (is (Float/compare (float 22.25) (:flow_rate_x (first (decode-bytes channel-2 bs-all)))))
-      (is (Float/compare (float 123.456) (:ground_distance (first (decode-bytes channel-2 bs-all)))))
-      (is (= 444444 (:time_usec (first (decode-bytes channel-2 bs-all)))))
-      (is (= 16 (:sensor_id (first (decode-bytes channel-2 bs-all)))))
-      (is (= 55 (:quality (first (decode-bytes channel-2 bs-all)))))
-      (is (= 4321 (:flow_y (first (decode-bytes channel-2 bs-all)))))
-      (is (Float/compare (float 55.25) (:flow_rate_y (first (decode-bytes channel-2 bs-all)))))
-      ))
-  (testing "Testing MAVLink 2.0 signatures."
-    (let [secret-key (bytes (byte-array (map (comp byte int) "abcdefghijklmnopqrstuvwxyz123456")))]
-      (update-channel channel-2 :secret-key secret-key)
-      (let [ bs-empty (encode channel-2 {:message-id :meminfo :sequence-id 1})
-            bs-empty-timestamp @(:encode-timestamp channel-2)
-            bs-empty-plus-timestamp (+ (get-timestamp) 6000000)
-            bs-1 (encode channel-2 {:message-id :meminfo :brkval 44})
-            bs-1-timestamp @(:encode-timestamp channel-2)
-            bs-2 (encode channel-2 {:message-id :meminfo :freemem 33})
-            bs-2-timestamp @(:encode-timestamp channel-2)
-            bs-3 (encode channel-2 {:message-id :meminfo :freemem32 66})
-            bs-3-timestamp @(:encode-timestamp channel-2)
-            bs-all (encode channel-2 {:message-id :meminfo :freemem32 66 :brkval 44 :freemem 33})
-            bs-all-timestamp @(:encode-timestamp channel-2)]
-        (is (< bs-empty-timestamp bs-1-timestamp bs-2-timestamp bs-3-timestamp bs-all-timestamp))
-        ; This decode is out of order, bu tsince it is the first, it is accepted.
-        (is (= [{:message-id :meminfo, :sequence-id 2, :system-id 99, :component-id 88, :link-id 0, :brkval 44, :freemem 0, :freemem32 0}]
-               (decode-bytes channel-2 bs-1)))
-        ; Because the bs-1-timestamp has been decoded, the bs-empty message cannot be decoded due to timestamp error
-        (is (= [] (decode-bytes channel-2 bs-empty)))
-        ; Because the bs-1-timestamp has been decoded, the bs-1 message cannot be decoded due to timestamp error
-        (is (= [] (decode-bytes channel-2 bs-1)))
-        ;
-        ; Now wipe out the signing tuples so the messages can be decoded in order.
-        (reset! (:signing-tuples channel-2) {})
-        (is (= [{:message-id :meminfo, :sequence-id 1, :system-id 99, :component-id 88, :link-id 0, :brkval 0, :freemem 0, :freemem32 0}]
-               (decode-bytes channel-2 bs-empty)))
-        (is (= [{:message-id :meminfo, :sequence-id 2, :system-id 99, :component-id 88, :link-id 0, :brkval 44, :freemem 0, :freemem32 0}]
-               (decode-bytes channel-2 bs-1)))
-        (is (= [{:message-id :meminfo, :sequence-id 3, :system-id 99, :component-id 88, :link-id 0, :brkval 0, :freemem 33, :freemem32 0}]
-               (decode-bytes channel-2 bs-2)))
-        (is (= [{:message-id :meminfo, :sequence-id 4, :system-id 99, :component-id 88, :link-id 0, :brkval 0, :freemem 0, :freemem32 66}]
-               (decode-bytes channel-2 bs-3)))
-        (is (= [{:message-id :meminfo, :sequence-id 5, :system-id 99, :component-id 88, :link-id 0, :brkval 44, :freemem 33, :freemem32 66}]
-               (decode-bytes channel-2 bs-all)))
-        ;
-        ; Now reset the signing tuple so it is more than one minute in the future of the empty message; then attempt
-        ; to decode the empty message, it should return nil
-        (reset! (:signing-tuples channel-2) { '(99 88 0) bs-empty-plus-timestamp})
-        (is (= [] (decode-bytes channel-2 bs-1)))
-      )))
-  (testing "Testing MAVLink 2.0 signatures, alternate open-channel interface."
-    (let [new-channel (open-channel mavlink-2 {:protocol :mavlink2
-                                               :system-id 99
-                                               :component-id 88
-                                               :link-id 15})
-          secret-key (bytes (byte-array (map (comp byte int) "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456")))]
-      (update-channel new-channel :secret-key secret-key :accept-unsigned-packets false)
-      (let [bs-empty (encode new-channel {:message-id :meminfo :sequence-id 1})
-            bs-1 (encode new-channel {:message-id :meminfo :brkval 44})
-            bs-2 (encode new-channel {:message-id :meminfo :freemem 33})
-            bs-3 (encode new-channel {:message-id :meminfo :freemem32 66})
-            bs-all (encode new-channel {:message-id :meminfo :freemem32 66 :brkval 44 :freemem 33})
-            servo-0 (encode new-channel {:message-id :servo-output-raw :link-id 22})
-            servo-1 (encode new-channel {:message-id :servo-output-raw :link-id 22 :servo1_raw 10})
-            servo-2 (encode new-channel {:message-id :servo-output-raw :link-id 22 :servo1_raw 10
-                                         :servo9_raw 20})
-            servo-3 (encode new-channel {:message-id :servo-output-raw :link-id 22 :servo1_raw 10
-                                         :servo9_raw 20 :servo16_raw 30})
-            servo-mangled (encode new-channel {:message-id :servo-output-raw :link-id 22 :servo1_raw 10
-                                         :servo9_raw 20 :servo16_raw 30})
-            ]
-        (is (= [{:message-id :meminfo, :sequence-id 1, :system-id 99, :component-id 88, :link-id 15, :brkval 0, :freemem 0, :freemem32 0}]
-               (decode-bytes new-channel bs-empty)))
-        (is (= [{:message-id :meminfo, :sequence-id 2, :system-id 99, :component-id 88, :link-id 15, :brkval 44, :freemem 0, :freemem32 0}]
-               (decode-bytes new-channel bs-1)))
-        (is (= [{:message-id :meminfo, :sequence-id 3, :system-id 99, :component-id 88, :link-id 15, :brkval 0, :freemem 33, :freemem32 0}]
-               (decode-bytes new-channel bs-2)))
-        (is (= [{:message-id :meminfo, :sequence-id 4, :system-id 99, :component-id 88, :link-id 15, :brkval 0, :freemem 0, :freemem32 66}]
-               (decode-bytes new-channel bs-3)))
-        (is (= [{:message-id :meminfo, :sequence-id 5, :system-id 99, :component-id 88, :link-id 15, :brkval 44, :freemem 33, :freemem32 66}]
-               (decode-bytes new-channel bs-all)))
-        (is (= [{:message-id :servo-output-raw, :sequence-id 6, :system-id 99, :component-id 88, :link-id 22,
-                 :time_usec 0N
-                 :port 0 
-                 :servo1_raw 0
-                 :servo2_raw 0
-                 :servo3_raw 0
-                 :servo4_raw 0
-                 :servo5_raw 0
-                 :servo6_raw 0
-                 :servo7_raw 0
-                 :servo8_raw 0
-                 :servo9_raw 0
-                 :servo10_raw 0
-                 :servo11_raw 0
-                 :servo12_raw 0
-                 :servo13_raw 0
-                 :servo14_raw 0
-                 :servo15_raw 0
-                 :servo16_raw 0
-                 }]
-               (decode-bytes new-channel servo-0)))
-        (is (= [{:message-id :servo-output-raw, :sequence-id 7, :system-id 99, :component-id 88, :link-id 22,
-                 :time_usec 0
-                 :port 0 
-                 :servo1_raw 10
-                 :servo2_raw 0
-                 :servo3_raw 0
-                 :servo4_raw 0
-                 :servo5_raw 0
-                 :servo6_raw 0
-                 :servo7_raw 0
-                 :servo8_raw 0
-                 :servo9_raw 0
-                 :servo10_raw 0
-                 :servo11_raw 0
-                 :servo12_raw 0
-                 :servo13_raw 0
-                 :servo14_raw 0
-                 :servo15_raw 0
-                 :servo16_raw 0
-                 }]
-               (decode-bytes new-channel servo-1)))
-        (is (= [{:message-id :servo-output-raw, :sequence-id 8, :system-id 99, :component-id 88, :link-id 22,
-                 :time_usec 0
-                 :port 0 
-                 :servo1_raw 10
-                 :servo2_raw 0
-                 :servo3_raw 0
-                 :servo4_raw 0
-                 :servo5_raw 0
-                 :servo6_raw 0
-                 :servo7_raw 0
-                 :servo8_raw 0
-                 :servo9_raw 20
-                 :servo10_raw 0
-                 :servo11_raw 0
-                 :servo12_raw 0
-                 :servo13_raw 0
-                 :servo14_raw 0
-                 :servo15_raw 0
-                 :servo16_raw 0
-                 }]
-               (decode-bytes new-channel servo-2)))
-        (is (= [] (decode-bytes new-channel servo-2)))
-        (aset-byte servo-mangled 55 (byte 1))
-        (is (= [] (decode-bytes new-channel servo-mangled)))
-        (is (= [] (decode-bytes new-channel servo-2)))
-        (is (= [{:message-id :servo-output-raw, :sequence-id 9, :system-id 99, :component-id 88, :link-id 22,
-                 :time_usec 0
-                 :port 0 
-                 :servo1_raw 10
-                 :servo2_raw 0
-                 :servo3_raw 0
-                 :servo4_raw 0
-                 :servo5_raw 0
-                 :servo6_raw 0
-                 :servo7_raw 0
-                 :servo8_raw 0
-                 :servo9_raw 20
-                 :servo10_raw 0
-                 :servo11_raw 0
-                 :servo12_raw 0
-                 :servo13_raw 0
-                 :servo14_raw 0
-                 :servo15_raw 0
-                 :servo16_raw 30
-                 }]
-               (decode-bytes new-channel servo-3)))
-      )))
+    (let [statistics (:statistics channel)]
+      (println "\n\nMavlink Statistics")
+      (pprint @statistics))
   )
+
+; retest all messages.

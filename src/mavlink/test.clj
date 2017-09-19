@@ -8,7 +8,7 @@
             [com.MAVLink.common msg_heartbeat]
             [com.MAVLink.enums MAV_AUTOPILOT MAV_STATE MAV_TYPE]))
 
-(def mavlink-map
+(def mavlink
           (parse {:xml-sources [{:xml-file "ardupilotmega.xml"
                                  :xml-source (-> "test/resources/ardupilotmega.xml" io/input-stream)}
                                 {:xml-file "common.xml"
@@ -29,41 +29,27 @@
     {:pipe-in pipe-in
      :pipe-out pipe-out}))
 
-(defonce decode-input-pipe (mk-pipe))
-(defonce decode-output-channel (async/chan 300))
-(defonce encode-input-channel  (async/chan 300))
-(defonce encode-output-channel (async/chan 300))
+(def decode-input-pipe (mk-pipe))
+(def decode-output-channel (async/chan 300))
+(def encode-input-channel  (async/chan 300))
+(def encode-output-channel (async/chan 300))
 
-(defn decode-bytearray
-  [^bytes the-array]
-  (.write ^PipedOutputStream (:pipe-out decode-input-pipe) the-array 0 (count the-array)))
-
-(defn decode-bytes-from-string
-  [String s]
-  (decode-bytearray (mk-bytes s)))
-
-(defn encode-message
+(defn encode-roundtrip
+  "Given a message map, encode it then get the decoded and round robin it back to the encode
+   and compare the result."
   [message]
-  (async/go (async/>! encode-input-channel message))
-  nil)
+  (println "one")
+  (async/>!! encode-input-channel message)
+  (println "two")
+  (when-let [message-bytes (async/<!! encode-output-channel)]
+  (println "three")
+    (doseq [b message-bytes] (print (str (bit-and 0xff b) " "))) (println)
+    (.write ^PipedOutputStream (:pipe-out decode-input-pipe) message-bytes 0 (count message-bytes))
+    (println "four")
+    (async/<!! decode-output-channel)))
 
-(defn get-channel
-  "Returns result of opening the channel, a map with :close-fn and :statistics bindings."
-  [mavlink]
-  ; start decode output thread
-  (async/thread
-    (loop [message (async/<!! decode-output-channel)]
-      (when message
-        (println "\nDecoded message:\n" message)
-        (recur (async/<!! decode-output-channel)))))
 
-  ; start encode output thread
-  (async/thread
-    (loop [message-bytes (async/<!! encode-output-channel)]
-      (decode-bytearray message-bytes)
-      (when message-bytes
-        (recur (async/<!! encode-output-channel)))))
-
+(def channel
   (open-channel mavlink {:protocol :mavlink1
                          :system-id 99
                          :component-id 88
@@ -77,8 +63,6 @@
                                                     (println "clj-mavlink/accept-message:\n" %1)
                                                     true)
                          :signing-options nil}))
- 
-(def channel (get-channel mavlink-map))
 
 (defonce ^Parser mavParser
   (let [parser (new Parser true)]
