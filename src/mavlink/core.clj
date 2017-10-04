@@ -2,7 +2,7 @@
   (:require [clojure.core.async :as async]
             [mavlink.checksum :refer :all]
             [mavlink.type :refer [byte-to-long]]
-            [mavlink.mavlink-xml :refer :all])
+            [mavlink.mavlink_xml :refer :all])
   (:import [java.io InputStream OutputStream]
            [java.nio ByteBuffer ByteOrder]
            [java.security MessageDigest]
@@ -258,7 +258,9 @@
 	        (do
 		  (swap! statistics update-in [:messages-encoded] inc)
 		  (if link-is-stream
-		    (.write ^OutputStream output-link ^bytes packed)
+                    (do
+                      (.write ^OutputStream output-link ^bytes packed)
+                      (.flush ^OutputStream output-link))
 		    (async/>!! output-link packed)))
 		; message failed to encode due to error in encode function
 	        (swap! statistics update-in [:encode-failed] inc)))
@@ -799,9 +801,11 @@
   "
   [{:keys [descriptions xml-sources] :as options}]
   {:pre [(pos? (count xml-sources))]}
-   (let [parsed (get-xml-zippers xml-sources)]
-     (reduce (fn [mavlink source]
-                 (add-mavlink mavlink (get-mavlink source options))) {} parsed)))
+   (let [parsed (get-xml-zippers xml-sources)
+         mavlink (reduce #(add-mavlink-enums %1 (get-mavlink-enums %2)) {} parsed)]
+     ; The mavlink map holds the merged enum data of all the XML sources
+     ; now add on all the message information from the XML sources
+     (reduce #(add-mavlink-messages %1 (get-mavlink-messages %2 options mavlink)) mavlink parsed)))
 
 (defn open-channel
   "Given a mavlink (the result of parse), and the open channel options

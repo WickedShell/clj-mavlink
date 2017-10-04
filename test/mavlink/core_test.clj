@@ -4,43 +4,11 @@
             [clojure.core.async :as async]
             [mavlink.checksum :refer :all]
             [mavlink.core :refer :all]
-            [mavlink.type :refer :all])
+            [mavlink.type :refer :all]
+            [mavlink.test_utilities :refer :all])
   (:import [com.mavlink CRC]
            [java.io PipedInputStream PipedOutputStream]
            [java.nio ByteBuffer ByteOrder]))
-
-(use 'clojure.pprint)
-
-(defn mkbytes
-  [^String s]
-  (into-array Byte/TYPE (mapv #(.byteValue (Long/valueOf % 16))
-                              (clojure.string/split s #" "))))
-
-(defn get-test-value
-  "Given a type, return a test value specific for that type.
-   Note that if it is an unknown type, a simple 0 is returned.
-   If the length is given, then generate a full array of test values."
-  ([type-key i]
-    (condp = type-key
-      :char     (char (+ (byte \A) (mod i 26)))
-      :int8_t   (bit-and 0xff (+ 5 i))
-      :uint8_t  (bit-and 0xff (+ 5 i))
-      :uint8_t_mavlink_version  3
-      :int16_t  (bit-and 0xffff (+ 17235 (* i 52)))
-      :uint16_t (bit-and 0xffff (+ 17235 (* i 52)))
-      :int32_t  (bit-and 0xffffffff (+ 963497464 (* i 52)))
-      :uint32_t (bit-and 0xffffffff (+ 963497464 (* i 52)))
-      :float    (float (+ 17.0 (* i 7)))
-      :double   (float (+ 177777.0 (* i 7)))
-      :int64_t   9223372036854775807
-      :uint64_t  (bigint (new java.math.BigInteger "9223372036854775807"))
-      0))
-  ([type-key i length]
-   (if length
-     (if (= type-key :char)
-       (reduce str (map #(get-test-value type-key %) (range length)))
-       (reduce conj [] (map #(get-test-value type-key %) (range length))))
-     (get-test-value type-key i))))
 
 ; The string version produces message specific magic bytes
 ; the other version returns the full checksum
@@ -62,20 +30,11 @@
        (.update-checksum crc crc-seed))
      (.crcValue crc))))
 
-(defn mk-pipe
-  []
-  (let [pipe-in (PipedInputStream.)
-        pipe-out (PipedOutputStream. pipe-in)]
-    {:pipe-in pipe-in
-     :pipe-out pipe-out}))
-
 (def decode-input-pipe (mk-pipe))
 (def decode-output-channel (async/chan 300))
 (def encode-input-channel  (async/chan 300))
 (def encode-output-channel (async/chan 300))
 
-(def secret-keyset [(bytes (byte-array (map (comp byte int) "000000abcdefghijklmnopqrstuvwxyz")))
-                    (bytes (byte-array (map (comp byte int) "abcdefghijklmnopqrstuvwxyz123456")))])
 (defn encode-oneway
   "Given a message map, encode it. Bute don't poll for the result because
    an error is expected."
@@ -91,26 +50,18 @@
     ; (println "The encoded bytes:")
     ; (doseq [b message-bytes] (print (str (bit-and 0xff b) " "))) (println)
     (.write ^PipedOutputStream (:pipe-out decode-input-pipe) message-bytes 0 (count message-bytes))
+    (.flush ^PipedOutputStream (:pipe-out decode-input-pipe))
     (async/<!! decode-output-channel)))
 
 
-(def mavlink (parse {:xml-sources [{:xml-file "test-include.xml"
-                                    :xml-source (-> "test/resources/test-include.xml" io/input-stream)}
-                                   {:xml-file "common.xml"
-                                    :xml-source (-> "test/resources/common.xml" io/input-stream)}
-                                   {:xml-file "uAvionix.xml"
-                                    :xml-source (-> "test/resources/uAvionix.xml" io/input-stream)}
-                                  ]
-                     :descriptions true}))
-
-(def mavlink-2 (parse {:xml-sources [{:xml-file "ardupilotmega.xml"
+(def mavlink (parse {:xml-sources [{:xml-file "ardupilotmega.xml"
                                       :xml-source (-> "test/resources/ardupilotmega.xml" io/input-stream)}
                                      {:xml-file "common.xml"
                                       :xml-source (-> "test/resources/common.xml" io/input-stream)}
                                      {:xml-file "uAvionix.xml"
                                       :xml-source (-> "test/resources/uAvionix.xml" io/input-stream)}]}))
 
-(def channel  (open-channel mavlink-2 {:protocol :mavlink1
+(def channel  (open-channel mavlink {:protocol :mavlink1
                                      :system-id 99
                                      :component-id 88
                                      :link-id 77
@@ -119,17 +70,14 @@
                                      :encode-input-channel encode-input-channel
                                      :encode-output-link encode-output-channel
                                      :exception-handler #(println "clj-mavlink/test exception:\n" %1)
-                                     :signing-options {:secret-key (get secret-keyset 0)
-                                                       :secret-keyset secret-keyset
-                                                       :accept-message-handler
+                                     :signing-options {:accept-message-handler
                                                               #(do
                                                                 (println "clj-mavlink/accept-message:\n" %1)
                                                                 true)
                                                        }}))
 
 (defn get-test-message 
-  "Given a message's specification map, generate a test message-map for it.
-   NOTE uses mavlink-2!!!!!"
+  "Given a message's specification map, generate a test message-map for it."
   [{:keys [msg-key fields] :as message-spec}]
   {:pre [msg-key
          (not (empty? fields))]}
@@ -137,7 +85,7 @@
          (apply merge (map #(let [{:keys [name-key type-key enum-type length]} %
                                   value (get-test-value type-key  5 length)]
                               {name-key (if enum-type
-                                          (get (enum-type (:enums-by-group mavlink-2))
+                                          (get (enum-type (:enums-by-group mavlink))
                                                value value)
                                           value)})
                            fields))))
@@ -284,76 +232,24 @@
           "Failed to find description")
       )))
 
-(deftest mavlink
+(deftest mavlink-core
   (testing "Testing multi file include."
-    (is (not (nil? (:uavionix-adsb-out-cfg (:messages-by-keyword mavlink-2))))
+    (is (not (nil? (:uavionix-adsb-out-cfg (:messages-by-keyword mavlink))))
         "Include from uAvionix.xml failed.")
-    (is (not (nil? (:heartbeat (:messages-by-keyword mavlink-2))))
+    (is (not (nil? (:heartbeat (:messages-by-keyword mavlink))))
         "Include from common.xml fialed.")
-    (is (not (nil? (:sensor-offsets (:messages-by-keyword mavlink-2))))
+    (is (not (nil? (:sensor-offsets (:messages-by-keyword mavlink))))
         "Include from ardupilotmega.xml failed."))
   (testing "For valid message checksums."
-    (is (== (-> mavlink-2 :messages-by-keyword :heartbeat :crc-seed) 50)
+    (is (== (-> mavlink :messages-by-keyword :heartbeat :crc-seed) 50)
         "Hearbeat magic byte checksum.")
-    (is (== (-> mavlink-2 :messages-by-keyword :sys-status :crc-seed) 124)
+    (is (== (-> mavlink :messages-by-keyword :sys-status :crc-seed) 124)
         "Sys Status magic byte checksum.")
-    (is (== (-> mavlink-2 :messages-by-keyword :change-operator-control :crc-seed) 217)
+    (is (== (-> mavlink :messages-by-keyword :change-operator-control :crc-seed) 217)
         "Change Operator Control magic byte checksum.")
-    (is (== (-> mavlink-2 :messages-by-keyword :param-set :crc-seed) 168)
+    (is (== (-> mavlink :messages-by-keyword :param-set :crc-seed) 168)
         "Param Set magic byte checksum.")
-    (is (== (-> mavlink-2 :messages-by-keyword :ping :crc-seed) 237)
+    (is (== (-> mavlink :messages-by-keyword :ping :crc-seed) 237)
         "output Raw magic byte checksum.")
-    (is (== (-> mavlink-2 :messages-by-keyword :servo-output-raw :crc-seed) 222)
-        "output Raw magic byte checksum."))
-  (testing "Message round trips."
-    (doseq [id (range 255)]
-      (when-let [msg-info (get (:messages-by-id mavlink-2) id)]
-        (let [message (get-test-message msg-info)
-              decoded-message (encode-roundtrip message)]
-          (println (str "-- Testing message " (:message-id message))) ; " :: " message))
-          (doseq [field (keys message)
-                  :let [result (if (number? (field message))
-                                 (when (number? (field decoded-message))
-                                   (== (field message) (field decoded-message)))
-                                 (= (field message) (field decoded-message)))]]
-            (is result
-              (str "message " (:message-id message) " field " field
-                   " failed: " (field message) " -> " (field decoded-message))))))))
-  (testing "automatic protocol change from MAVlink 1 to MAVlink 2"
-    (let [statistics (:statistics channel)]
-      (encode-oneway {:message-id :device-op-read})
-      (Thread/sleep 1) ; give the encode a thread an opportunity to run
-      (is (== 1 (:bad-protocol @statistics))
-          "MAVlink 2 only message should fail to encode due to bad protocol")
-      (let [decoded-message (encode-roundtrip {:message-id :heartbeat :mavlink-protocol :mavlink2})]
-        (is decoded-message
-            "Failed to send MAVlink 2 heartbeat"))
-      (let [decoded-message (encode-roundtrip {:message-id :device-op-read})]
-        (is decoded-message
-          "Failed to send MAVlink 2 only test message"))
-      (is (== 1 (:bad-protocol @(:statistics channel)))
-          "Second attempt to send MAVlink 2 only message should pass.")
-      )
-    )
-  (testing "Roundtrip of all messages."
-    (println (str "There are " (count (vals (:messages-by-id mavlink-2))) " messages."))
-    (doseq [msg-info (vals (:messages-by-id mavlink-2))]
-        (let [message (get-test-message msg-info)
-              decoded-message (encode-roundtrip message)]
-          (println (str "-- Testing message " (:message-id message) " :: " message))
-          ; (pprint decoded-message)
-          (doseq [field (keys message)
-                  :let [result (if (number? (field message))
-                                 (when (number? (field decoded-message))
-                                   (== (field message) (field decoded-message)))
-                                 (= (field message) (field decoded-message)))]]
-            (is result
-              (str "message " (:message-id message) " field " field
-                   " failed: " (field message) " -> " (field decoded-message)))))))
-
-    (let [statistics (:statistics channel)]
-      (println "\n\nMavlink Statistics")
-      (pprint @statistics))
-  )
-
-; retest all messages.
+    (is (== (-> mavlink :messages-by-keyword :servo-output-raw :crc-seed) 222)
+        "output Raw magic byte checksum.")))

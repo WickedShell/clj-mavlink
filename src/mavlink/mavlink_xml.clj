@@ -1,4 +1,4 @@
-(ns mavlink.mavlink-xml
+(ns mavlink.mavlink_xml
   (:require [clojure.data.xml :as xml]
             [clojure.zip :as zip]
             [clojure.data.zip.xml :as zip-xml]
@@ -143,9 +143,11 @@
           (assoc! message name-key (let [v (read-fn buffer)]
                                      (get enum-group v v))))))))
 
-(defn get-mavlink
-  "Return a mavlink map for one xml source."
-  [{:keys [^String file-name zipper] :as source} {:keys [descriptions] :as options}]
+(defn get-mavlink-enums
+  "Return a mavlink map of enum data for one xml source.
+     source {:file-name source file name
+             :zipper zipper of parse tree of source file}"
+  [{:keys [^String file-name zipper]}]
   (let [enum-to-value (reduce merge
                               (zip-xml/xml-> zipper
                                              :mavlink
@@ -184,8 +186,21 @@
                          (apply merge
                                 (zip-xml/xml-> e :entry
                                                #(let [enum-key (keywordize (zip-xml/attr % :name))]
-                                                  {(enum-key enum-to-value) enum-key})))})))
-       messages-by-keyword
+                                                  {(enum-key enum-to-value) enum-key})))})))]
+   {:enum-to-value enum-to-value
+    :enums-by-group enums-by-group
+    :source file-name}))  ; return source so can be used in conflict error messages
+
+(defn get-mavlink-messages
+  "Return a mavlink map for one xml source.
+     source {:file-name source file name
+             :zipper zipper of parse tree of source file}
+     options the parse options map, only :descriptions tag is referenced
+     mavlink the mavlink map holding the :enum-to-value and :enums-group mappings"
+  [{:keys [^String file-name zipper]}
+   {:keys [descriptions] :as options}
+   {:keys [enum-to-value enums-by-group]}]
+  (let [messages-by-keyword
           (apply
             merge
             (zip-xml/xml->
@@ -262,23 +277,29 @@
                                 (zip-xml/xml1-> m :description zip-xml/text)
                               })))))]
    {:descriptions all-descriptions
-    :enum-to-value enum-to-value
-    :enums-by-group enums-by-group
     :messages-by-keyword messages-by-keyword
     :messages-by-id (apply merge (map #(hash-map (:msg-id %) %)
                                     (vals messages-by-keyword)))
     :source file-name}))
 
-(defn add-mavlink
-  "Given two mavlink maps, merge the contents of the second with the first."
-  [{:keys [descriptions enum-to-value enums-by-group
-           messages-by-keyword messages-by-id source]} new-part]
+(defn add-mavlink-enums
+  "Given two partial mavlink maps (with :enum data only), 
+   merge the contents of the second with the first."
+  [{:keys [enum-to-value enums-by-group]}
+   {:keys [source] :as new-part}]
   (let [conflicts (filterv #(% enum-to-value) (keys (:enum-to-value new-part)))]
     (when-not (empty? conflicts)
       (throw (ex-info "Enum values conflict"
                       {:cause :enum-conflicts
                        :conflicts conflicts
                        :source source}))))
+  {:enum-to-value (merge enum-to-value (:enum-to-value new-part))
+   :enums-by-group (merge enums-by-group (:enums-by-group new-part))})
+
+(defn add-mavlink-messages
+  "Given two mavlink maps, merge the contents of the second with the first."
+  [{:keys [descriptions messages-by-keyword messages-by-id] :as mavlink}
+   {:keys [source] :as new-part}]
   (let [conflicts (filterv #(get messages-by-id %) (keys (:messages-by-id new-part)))]
     (when-not (empty? conflicts)
       (throw (ex-info "Message ID's conflict"
@@ -291,12 +312,11 @@
                       {:cause :message-name-conflicts
                        :conflicts conflicts
                        :source source}))))
-  {:descriptions (merge descriptions (:descriptions new-part))
-   :enum-to-value (merge enum-to-value (:enum-to-value new-part))
-   :enums-by-group (merge enums-by-group (:enums-by-group new-part))
-   :messages-by-keyword (merge messages-by-keyword
-                               (:messages-by-keyword new-part))
-   :messages-by-id (merge messages-by-id (:messages-by-id new-part))})
+  (merge mavlink 
+         {:descriptions (merge descriptions (:descriptions new-part))
+          :messages-by-keyword (merge messages-by-keyword
+                                      (:messages-by-keyword new-part))
+          :messages-by-id (merge messages-by-id (:messages-by-id new-part))}))
 
 (defn get-xml-zippers
   "Open all the xml sources, verify that each source' includes are in the list; return
