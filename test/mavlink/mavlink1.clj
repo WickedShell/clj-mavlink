@@ -18,7 +18,7 @@
 (def encode-output-channel (async/chan 300))
 
 (defn encode-oneway
-  "Given a message map, encode it. Bute don't poll for the result because
+  "Given a message map, encode it. But don't poll for the result because
    an error is expected."
   [message]
   (async/>!! encode-input-channel message))
@@ -101,7 +101,25 @@
       (is (== 1 (:bad-protocol @(:statistics channel)))
           "Second attempt to send MAVlink 2 only message should pass.")
       ))
+  )
+
+(deftest message-encode-errors
+  (testing "Message encoding erros."
     (let [statistics (:statistics channel)]
+      (let [message {:message-id :bad-message-id}
+            decoded-message (encode-oneway message)]
+        (is (== (:encode-failed @statistics) 1)
+            "Encode should fail due to bad message id"))
+      (let [message {:message-id :heartbeat :non-existent-field "NOPE"}
+            decoded-message (encode-roundtrip message)]
+        (is (nil? (:non-existent-field decoded-message))
+            "Encode should fail bad field."))
+      (let [message {:message-id :heartbeat :type :bad-enum}
+            decoded-message (encode-oneway message)]
+        (is (= message decoded-message)
+            "Encode should fail due to bad message id"))
+
+      ; print the final statistics
       (println "\n\nMavlink Statistics")
       (pprint @statistics))
-  )
+    ))
