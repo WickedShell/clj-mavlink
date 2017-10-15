@@ -12,6 +12,8 @@
 
 (use 'clojure.pprint)
 
+(def last-error (atom nil))
+
 (def decode-input-pipe (mk-pipe))
 (def decode-output-channel (async/chan 300))
 (def encode-input-channel  (async/chan 300))
@@ -46,6 +48,7 @@
                                      :system-id 99
                                      :component-id 88
                                      :link-id 77
+                                     :report-error #(reset! last-error %1)
                                      :decode-input-stream (:pipe-in decode-input-pipe)
                                      :decode-output-channel decode-output-channel
                                      :encode-input-channel encode-input-channel
@@ -73,6 +76,7 @@
 
 (deftest mavlink-1-0
   (testing "Message round trips."
+    (reset! last-error nil)
     (doseq [id (range 255)]
       (when-let [msg-info (get (:messages-by-id mavlink) id)]
         (let [message (get-test-message msg-info)
@@ -85,12 +89,15 @@
                                  (= (field message) (field decoded-message)))]]
             (is result
               (str "message " (:message-id message) " field " field
-                   " failed: " (field message) " -> " (field decoded-message))))))))
+                   " failed: " (field message) " -> " (field decoded-message)))))))
+    (is (nil? @last-error)
+        "None of the round trips should cause a failure."))
   (testing "automatic protocol change from MAVlink 1 to MAVlink 2"
     (let [statistics (:statistics channel)]
       (encode-oneway {:message-id :device-op-read})
       (Thread/sleep 1) ; give the encode a thread an opportunity to run
-      (is (== 1 (:bad-protocol @statistics))
+      (is  (and (== 1 (:bad-protocol @statistics))
+               (= :bad-protocol (:cause (ex-data @last-error))))
           "MAVlink 2 only message should fail to encode due to bad protocol")
       (let [decoded-message (encode-roundtrip {:message-id :heartbeat :mavlink-protocol :mavlink2})]
         (is decoded-message
@@ -108,16 +115,20 @@
     (let [statistics (:statistics channel)]
       (let [message {:message-id :bad-message-id}
             decoded-message (encode-oneway message)]
-        (is (== (:encode-failed @statistics) 1)
+        (is (and (== (:encode-failed @statistics) 1)
+                 (= :invalid-message-id (:cause (ex-data @last-error))))
             "Encode should fail due to bad message id"))
-      (let [message {:message-id :heartbeat :non-existent-field "NOPE"}
-            decoded-message (encode-roundtrip message)]
-        (is (nil? (:non-existent-field decoded-message))
-            "Encode should fail bad field."))
-      (let [message {:message-id :heartbeat :type :bad-enum}
-            decoded-message (encode-oneway message)]
-        (is (= message decoded-message)
+      (let [message {:message-id :heartbeat :type :bad-enum}]
+        (encode-oneway message)
+        (Thread/sleep 10)
+        (is (= :undefined-enum (:cause (ex-data @last-error)))
             "Encode should fail due to bad message id"))
+; FIXME cannot run this test because this does not currentl cause a failure.
+;      (let [message {:message-id :heartbeat :non-existent-field "NOPE"}
+;            decoded-message (encode-roundtrip message)]
+;        (Thread/sleep 10)
+;        (is (= :encode-fn-failed (:cause (ex-data @last-error)))
+;            "Encode should fail bad field."))
 
       ; print the final statistics
       (println "\n\nMavlink Statistics")

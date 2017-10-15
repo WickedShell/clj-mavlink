@@ -38,7 +38,7 @@
    message - the message map as received from the application
    message-info - the mavlink message information
    "
-  ^bytes [{:keys [mavlink system-id component-id ]}
+  ^bytes [{:keys [mavlink system-id component-id]}
           ^long sequence-id
           message
           {:keys [encode-fns ^long payload-size crc-seed
@@ -241,7 +241,7 @@
    output-link - the stream to write the encoded bytes to or
                  a clojue channel to put the messages to
    "
-  ^bytes [{:keys [mavlink continue protocol
+  ^bytes [{:keys [mavlink continue protocol report-error
                   signing-options statistics] :as channel}
           input-channel
           output-link]
@@ -259,7 +259,7 @@
           ; look up the message-info based on the :message-id of the message
           (if-let [message-info ((:message-id message)
                                  (:messages-by-keyword mavlink))]
-            (do
+            (try
              ; update the sequence id then encode the message
               (if-let [seq-id- (:sequence-id message)]
                  (vreset! sequence-id (mod seq-id- 256))
@@ -271,7 +271,9 @@
                                       (do
                                         (swap! statistics update-in
                                                [:bad-protocol] inc)
-                                        nil)
+                                        (throw (ex-info "MAVlink 2 message id, current protocol is MAVLink 1"
+                                                        {:cause :bad-protocol
+                                                         :message message})))
                                       (encode-mavlink1 channel @sequence-id
                                                        message message-info))
                                   :mavlink2
@@ -289,9 +291,26 @@
                       (.flush ^OutputStream output-link))
                     (async/>!! output-link packed)))
                 ; message failed to encode due to error in encode function
-                (swap! statistics update-in [:encode-failed] inc)))
+                (do
+                  (swap! statistics update-in [:encode-failed] inc)
+                  (when report-error
+                    (report-error (ex-info "Encoding failed" 
+                                           {:cause :encode-fn-failed
+                                            :message message})))))
+              (catch Exception e (let [err-data (ex-data e)]
+                                   (if (and report-error
+                                            err-data
+                                            (or (= (:cause err-data) :undefined-enum)
+                                                (= (:cause err-data) :bad-protocol)))
+                                     (report-error e)
+                                     (throw e)))))
              ; message failed to encode because invalid :message-id
-             (swap! statistics update-in [:encode-failed] inc))
+             (do
+               (swap! statistics update-in [:encode-failed] inc)
+               (when report-error
+                 (report-error (ex-info "Encoding failed."
+                                        {:cause :invalid-message-id
+                                         :mesage message})))))
           (recur (async/<!! input-channel)))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -936,6 +955,9 @@
      encode-output-link    - either an output stream to write the encoded bytes to
                              or a channel to write the encoded byte array to
                              (anything else will cause an exception)
+     report-error          - function to report non-fatal errors, particularly
+                             encoding errors, is passed an Exception output from
+                             ex-info (which details the error)
      exception-handler     - exception handler function,
                              if nil the exception is thrown
                              otherwise this function is called with the exception
@@ -979,6 +1001,7 @@
                    decode-output-channel
                    encode-input-channel
                    encode-output-link
+                   report-error
                    exception-handler
                    link-id
                    protocol
@@ -1024,6 +1047,7 @@
                  :link-id (or link-id 0)    ; MAVLink 2.0, encoding only
                  :mavlink mavlink           ; returned by parse
                  :protocol (atom protocol)
+                 :report-error report-error ; function to call to report errors
                  :continue continue         ; encode/decode thread continue flag
                  :signing-options signing-options-map
                  :statistics statistics
@@ -1061,7 +1085,7 @@
                     :signing-tuples (:signing-tuples channel)})
         ; shutdown the encode thread normally
         (shutdown-fn nil)
-        (catch Exception e (shutdown-fn (ex-info "clj-mavlink decode error"
+        (catch Exception e (shutdown-fn (ex-info "clj-mavlink decode thread Exception"
                                                  {:cause :decode}
                                                  e)))))
 
@@ -1073,7 +1097,7 @@
                          encode-output-link)
         ; shutdown the decode thread normally
         (shutdown-fn nil)
-        (catch Exception e (shutdown-fn (ex-info "clj-mavlink encode error"
+        (catch Exception e (shutdown-fn (ex-info "clj-mavlink encode thread Exception"
                                                  {:cause :encode}
                                                  e)))))
 

@@ -12,6 +12,8 @@
 
 (use 'clojure.pprint)
 
+(def last-error (atom nil))
+
 (def decode-input-pipe (mk-pipe))
 (def decode-output-channel (async/chan 300))
 (def encode-input-channel  (async/chan 300))
@@ -53,6 +55,7 @@
                                      :decode-output-channel decode-output-channel
                                      :encode-input-channel encode-input-channel
                                      :encode-output-link encode-output-channel
+                                     :report-error #(reset! last-error %1)
                                      :exception-handler #(println "clj-mavlink/test exception:\n" %1)
                                      :signing-options {:secret-key (get secret-keyset 0)
                                                        :secret-keyset secret-keyset
@@ -109,6 +112,7 @@
     )
   (testing "Roundtrip of all messages."
     (println (str "There are " (count (vals (:messages-by-id mavlink))) " messages types."))
+    (reset! last-error nil)
     (doseq [msg-info (vals (:messages-by-id mavlink))]
         (let [message (get-test-message msg-info)
               decoded-message (encode-roundtrip message)]
@@ -122,6 +126,9 @@
             (is result
               (str "message " (:message-id message) " field " field
                    " failed: " (field message) " -> " (field decoded-message)))))))
+
+    (is (nil? @last-error)
+        "None of the round trips should cause a failure.")
 
     (let [statistics (:statistics channel)]
       (println "\n\nMavlink Statistics")

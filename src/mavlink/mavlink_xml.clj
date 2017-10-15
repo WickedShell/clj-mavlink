@@ -116,7 +116,9 @@
         (fn encode-it [mavlink payload message]
           (write-fn payload (translate-keyword mavlink (get message name-key 0)))))
      (throw (ex-info (str "No function to write " type-key)
-                     {:cause :no-write-fn})))))
+                     {:cause :no-write-fn
+                      :name-key name-key
+                      :type-key type-key})))))
 
 (defn gen-decode-fn
   "Generate the decode function for a field. Because they have the same structure
