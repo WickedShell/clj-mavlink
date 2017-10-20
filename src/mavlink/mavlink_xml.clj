@@ -43,23 +43,25 @@
   (if-let [node (zip-xml/xml1-> m :extensions)]
     (remove nil? 
             (mapv #(when (= (:tag %) :field)
-                     (let [{:keys [enum name type]} (:attrs % first)]
+                     (let [{:keys [enum name type display]} (:attrs % first)]
                        {:fld-name name
                         :name-key (keyword name)
                         :type-key (get-type type)
                         :enum-type (when enum
                                      (keywordize enum))
+                        :bitmask (= "bitmask" display) 
                         :length (get-array-length type) }))
                   (zip/lefts node)))
     (vec
       (zip-xml/xml-> m :field
         (fn [f]
-          (let [{:keys [enum name type]} (-> f first :attrs)]
+          (let [{:keys [enum name type display]} (-> f first :attrs)]
             {:fld-name name
              :name-key (keyword name)
              :type-key (get-type type)
              :enum-type (when enum
                           (keywordize enum))
+             :bitmask (= "bitmask" display) 
              :length (get-array-length type) }))))))
 
 (defn get-extension-fields
@@ -69,12 +71,13 @@
     (when-let [ext-fields (zip/rights node)]
       (vec
         (for [f ext-fields]
-          (let [{:keys [enum name type]} (:attrs f)]
+          (let [{:keys [enum name type display]} (:attrs f)]
             {:fld-name name
              :name-key (keyword name)
              :type-key (get-type type)
              :enum-type (when enum
                           (keywordize enum))
+             :bitmask (= "bitmask" display) 
              :length (get-array-length type)
              }))))))
 
@@ -94,27 +97,66 @@
   `(if (keyword? ~value)
      (if-let [enum-val# (~value (:enum-to-value ~mavlink))]
        enum-val#
-       (throw (ex-info "Unable to translate enum before encoding"
-                       {:cause :undefined-enum
+       (throw (ex-info "Unable to translate undefined enum"
+                       {:cause :invalid-enum
+                        :error :encode-failed
                         :enum ~value})))
      ~value))
+
+(defn gen-encode-bitmask
+  "Generate the encode bitmask function; add error checking to
+   be sure the user supplies valid values for the bitmask.
+   Note that enum-group ro value to enum-key, so the reverse is
+   enum-key to value bindings."
+  [write-fn name-key enum-type enums-by-group]
+  (let [enum-group (enum-type enums-by-group)
+        reverse-enum-group (clojure.set/map-invert enum-group)]
+    (fn encode-it-bitmask [mavlink payload message]
+      (let [value (or (name-key message) 0)]
+        (if (number? value)
+          (write-fn payload value)
+          (if (vector? value)
+            (write-fn payload
+                      (reduce #(if-let [bitmask (%2 reverse-enum-group)]
+                                 (bit-or %1 bitmask)
+                                 (throw (ex-info "Illegal value for bitmask"
+                                                 {:cause :invalid-bitmask
+                                                  :error :encode-failed
+                                                  :field name-key
+                                                  :value %2})))
+                        0
+                        value))
+            (throw (ex-info "Bitmask value must be either a number of a vector of bitmask keys."
+                            {:cause :invalid-bitmask
+                             :error :encode-failed
+                             :name-key name-key
+                             :value value}))))))))
 
 (defn gen-encode-fn
   "Generate the encode function for a field. Because they have the same structure
    this function works on both regular fields and extension fields."
-  [{:keys [name-key type-key length] :as field}]
+  [{:keys [name-key type-key enum-type length bitmask] :as field} enums-by-group]
   (let [write-fn (type-key write-payload)]
     (if write-fn
-      (if length
-        (fn encode-it-array [mavlink payload message]
-          (let [value (name-key message)
-                num-missing (- length (count value))]
-            (doseq [fval value]
-              (write-fn payload (translate-keyword mavlink fval)))
-            (dotimes [i num-missing]
-              (write-fn payload 0))))
-        (fn encode-it [mavlink payload message]
-          (write-fn payload (translate-keyword mavlink (get message name-key 0)))))
+      (if (and length bitmask)
+        (throw (ex-info "Cannot have an array of bitmasks."
+                        {:cause :array-bitmasks
+                         :name-key name-key
+                         :type-key type-key
+                         :length length
+                         :bitmask bitmask}))
+        (if length
+          (fn encode-it-array [mavlink payload message]
+            (let [value (name-key message)
+                  num-missing (- length (count value))]
+              (doseq [fval value]
+                (write-fn payload (translate-keyword mavlink fval)))
+              (dotimes [i num-missing]
+                (write-fn payload 0))))
+          (if bitmask
+            (gen-encode-bitmask write-fn name-key enum-type enums-by-group)
+            (fn encode-it [mavlink payload message]
+              (write-fn payload (translate-keyword mavlink (get message name-key 0)))))))
      (throw (ex-info (str "No function to write " type-key)
                      {:cause :no-write-fn
                       :name-key name-key
@@ -122,10 +164,13 @@
 
 (defn gen-decode-fn
   "Generate the decode function for a field. Because they have the same structure
-   this function works on both regular fields and extension fields."
-  [{:keys [name-key type-key length enum-type] :as field} enums-by-group]
+   this function works on both regular fields and extension fields.
+   Note that we depend on gen-encode-fn to catch bitmask errors, there is no need
+   to catch them twice."
+  [{:keys [name-key type-key length enum-type bitmask] :as field} enums-by-group]
   (let [read-fn (type-key read-payload)
-        enum-group (get enums-by-group enum-type) ]
+        enum-group (get enums-by-group enum-type)
+        reverse-enum-group (clojure.set/map-invert enum-group)]
     (if-not read-fn
       (throw (ex-info "Unknown type for read"
                       {:cause :no-read-fn
@@ -141,9 +186,27 @@
             (assoc! message  name-key (if (= type-key :char)
                                         (.trim (new String ^"[B" (into-array Byte/TYPE new-array)))
                                         new-array))))
-        (fn decode-it [buffer message]
-          (assoc! message name-key (let [v (read-fn buffer)]
-                                     (get enum-group v v))))))))
+          (fn decode-it [buffer message]
+            (assoc! message name-key (let [v (if (and bitmask
+                                                      (= type-key :uint64_t))
+                                               (.longValue (read-fn buffer))
+                                               (read-fn buffer))]
+                                       (if (and bitmask enum-type)
+                                         ; bit-set? will return boolean true or false
+                                         ; bit-set? bitmask argument can be either a
+                                         ;          number or enum keyword
+                                         {:raw-value v
+                                          :bit-set? (fn[bitmask]
+                                                      (if (number? bitmask)
+                                                        (pos? (bit-and v bitmask))
+                                                        (if-let [bit (bitmask reverse-enum-group)]
+                                                          (pos? (bit-and v bit))
+                                                          (throw (ex-info (str "Invalid bitmask: " bitmask " for enum " enum-type)
+                                                                          {:cause :invalid-bitmask
+                                                                           :name-key name-key
+                                                                           :enum-type enum-type
+                                                                           :bitmask bitmask})))))}
+                                         (get enum-group v v)))))))))
 
 (defn get-mavlink-enums
   "Return a mavlink map of enum data for one xml source.
@@ -239,9 +302,9 @@
                               checksum (compute-checksum msg-seed)]
                           (bit-xor (bit-and checksum 0xFF)
                                    (bit-and (bit-shift-right checksum 8) 0xff)))
-                      encode-fns (mapv gen-encode-fn fields)
+                      encode-fns (mapv #(gen-encode-fn % enums-by-group) fields)
                       decode-fns (mapv #(gen-decode-fn % enums-by-group) fields)
-                      ext-encode-fns (mapv gen-encode-fn ext-fields)
+                      ext-encode-fns (mapv #(gen-encode-fn % enums-by-group) ext-fields)
                       ext-decode-fns (mapv #(gen-decode-fn % enums-by-group) ext-fields)
                       ]
                   {(keywordize msg-name)

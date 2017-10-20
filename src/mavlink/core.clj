@@ -260,48 +260,52 @@
           (if-let [message-info ((:message-id message)
                                  (:messages-by-keyword mavlink))]
             (try
-             ; update the sequence id then encode the message
-              (if-let [seq-id- (:sequence-id message)]
-                 (vreset! sequence-id (mod seq-id- 256))
-                 (vswap! sequence-id #(mod (inc %) 256)))
-              (if-let [packed (case (or (:mavlink-protocol message)
-                                        @protocol)
-                                  :mavlink1
-                                    (if (>= (:msg-id message-info) 256)
-                                      (do
-                                        (swap! statistics update-in
-                                               [:bad-protocol] inc)
-                                        (throw (ex-info "MAVlink 2 message id, current protocol is MAVLink 1"
-                                                        {:cause :bad-protocol
-                                                         :message message})))
-                                      (encode-mavlink1 channel @sequence-id
-                                                       message message-info))
-                                  :mavlink2
-                                    (encode-mavlink2 channel @sequence-id
-                                                     @secret-key encode-sha256
-                                                     message message-info)
-                                    )]
-                ; message successfully encoded,
-                ; update statistics and send it out
-                (do
-                  (swap! statistics update-in [:messages-encoded] inc)
-                  (if link-is-stream
-                    (do
-                      (.write ^OutputStream output-link ^bytes packed)
-                      (.flush ^OutputStream output-link))
-                    (async/>!! output-link packed)))
-                ; message failed to encode due to error in encode function
-                (do
-                  (swap! statistics update-in [:encode-failed] inc)
-                  (when report-error
-                    (report-error (ex-info "Encoding failed" 
-                                           {:cause :encode-fn-failed
-                                            :message message})))))
+              ; calculate the sequence id then encode the message
+              ; don't update the mavlink sequence id until after message is sent
+              (let [msg-seq-id (:sequence-id message)
+                    new-seq-id (if msg-seq-id
+                                 (mod msg-seq-id 256)
+                                 (mod (inc @sequence-id) 256))]
+                (if-let [packed (case (or (:mavlink-protocol message)
+                                          @protocol)
+                                    :mavlink1
+                                      (if (>= (:msg-id message-info) 256)
+                                        (do
+                                          (swap! statistics update-in
+                                                 [:bad-protocol] inc)
+                                          (throw (ex-info "MAVlink 2 message id, current protocol is MAVLink 1"
+                                                          {:cause :bad-protocol
+                                                           :error :encode-failed
+                                                           :message message})))
+                                        (encode-mavlink1 channel new-seq-id
+                                                         message message-info))
+                                    :mavlink2
+                                      (encode-mavlink2 channel new-seq-id
+                                                       @secret-key encode-sha256
+                                                       message message-info)
+                                      )]
+                  ; message successfully encoded,
+                  ; update statistics and send it out
+                  (do
+                    (swap! statistics update-in [:messages-encoded] inc)
+                    (if link-is-stream
+                      (do
+                        (.write ^OutputStream output-link ^bytes packed)
+                        (.flush ^OutputStream output-link))
+                      (async/>!! output-link packed))
+                    ; now update mavlink sequence id
+                    (vreset! sequence-id new-seq-id))
+                  ; message failed to encode due to error in encode function
+                  (do
+                    (swap! statistics update-in [:encode-failed] inc)
+                    (when report-error
+                      (report-error (ex-info "Encoding failed" 
+                                             {:cause :encode-fn-failed
+                                              :message message}))))))
               (catch Exception e (let [err-data (ex-data e)]
                                    (if (and report-error
                                             err-data
-                                            (or (= (:cause err-data) :undefined-enum)
-                                                (= (:cause err-data) :bad-protocol)))
+                                            (= (:error err-data) :encode-failed))
                                      (report-error e)
                                      (throw e)))))
              ; message failed to encode because invalid :message-id
@@ -310,7 +314,8 @@
                (when report-error
                  (report-error (ex-info "Encoding failed."
                                         {:cause :invalid-message-id
-                                         :mesage message})))))
+                                         :error :encode-failed
+                                         :message message})))))
           (recur (async/<!! input-channel)))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -318,6 +323,22 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (declare start-state)
+
+(defn update-decode-statistics
+  [system-id sequence-id statistics]
+  (let [{:keys [last-seq-ids messages-decoded messages-skipped]} @statistics
+        last-seq-id (aget last-seq-ids system-id)
+        difference (- sequence-id (mod (inc last-seq-id) 256))
+        skipped (if (neg? last-seq-id)
+                  0
+                  (if (neg? difference)
+                    (+ difference 255)
+                    difference))]
+    (println (str "last seq id: " last-seq-id " new message sequence id: " sequence-id
+                  " number skipped: " skipped))
+    (aset last-seq-ids system-id sequence-id)
+    (swap! statistics assoc :messages-decoded (inc messages-decoded)
+                            :messages-skipped (+ skipped messages-skipped))))
 
 (defn- decode-mavlink1
   "Decode a MAVLink 1.0 message in the channel's buffer Return a message
@@ -327,7 +348,7 @@
    buffer - the buffer to decode
    statistics - the statistics atom
    "
-  [message
+  [{:keys [system-id sequence-id] :as message}
    decode-fns
    ^ByteBuffer buffer
    statistics]
@@ -339,7 +360,7 @@
                   (reduce (fn [message decode-fn] (decode-fn buffer message))
                           (transient message)
                           decode-fns))]
-    (swap! statistics update-in [:messages-decoded] inc)
+    (update-decode-statistics system-id sequence-id statistics)
     message))
 
 (defn- decode-mavlink2
@@ -359,7 +380,7 @@
    msg-payload-sie - the payload size of the message
    statistics - the statistics atom
    "
-  [message
+  [{:keys [system-id sequence-id] :as message}
    message-info
    ^ByteBuffer buffer
    msg-payload-size
@@ -381,7 +402,7 @@
                                        (transient message)
                                        (concat decode-fns
                                                extension-decode-fns)))]
-      (swap! statistics update-in [:messages-decoded] inc)
+      (update-decode-statistics system-id sequence-id statistics)
       message)))
 
  (defn- try-secret-key
@@ -1024,6 +1045,8 @@
         statistics (atom {:bytes-read 0
                           :bytes-decoded 0
                           :messages-decoded 0
+                          :last-seq-ids (int-array 256 -1)
+                          :messages-skipped 0
                           :messages-encoded 0
                           :encode-failed 0
                           :decode-failed 0

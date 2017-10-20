@@ -10,6 +10,8 @@
            [java.io PipedInputStream PipedOutputStream]
            [java.nio ByteBuffer ByteOrder]))
 
+(use 'clojure.pprint)
+
 ; The string version produces message specific magic bytes
 ; the other version returns the full checksum
 (defn compute-crc-checksum
@@ -69,6 +71,7 @@
                                      :decode-output-channel decode-output-channel
                                      :encode-input-channel encode-input-channel
                                      :encode-output-link encode-output-channel
+                                     :report-error #(pprint %)
                                      :exception-handler #(println "clj-mavlink/test exception:\n" %1)
                                      :signing-options {:accept-message-handler
                                                               #(do
@@ -82,12 +85,14 @@
   {:pre [msg-key
          (not (empty? fields))]}
   (merge {:message-id msg-key}
-         (apply merge (map #(let [{:keys [name-key type-key enum-type length]} %
-                                  value (get-test-value type-key  5 length)]
-                              {name-key (if enum-type
-                                          (get (enum-type (:enums-by-group mavlink))
-                                               value value)
-                                          value)})
+         (apply merge (map #(let [{:keys [name-key type-key enum-type length bitmask]} %
+                                  enum-group (enum-type (:enums-by-group mavlink))]
+                              {name-key (if (and bitmask enum-type)
+                                          (get-test-bitmask enum-group)
+                                          (let [value (get-test-value type-key  5 length)]
+                                            (if enum-type
+                                              (get enum-group value value)
+                                              value)))})
                            fields))))
 
 (deftest clj-mavlink-utilities

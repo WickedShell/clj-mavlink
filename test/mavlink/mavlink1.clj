@@ -66,12 +66,15 @@
   {:pre [msg-key
          (not (empty? fields))]}
   (merge {:message-id msg-key}
-         (apply merge (map #(let [{:keys [name-key type-key enum-type length]} %
-                                  value (get-test-value type-key  5 length)]
-                              {name-key (if enum-type
-                                          (get (enum-type (:enums-by-group mavlink))
-                                               value value)
-                                          value)})
+         (apply merge (map #(let [{:keys [name-key type-key enum-type length bitmask]} %
+                                  enum-group (when enum-type
+                                               (enum-type (:enums-by-group mavlink)))]
+                              {name-key (if (and bitmask enum-type)
+                                          (get-test-bitmask enum-group)
+                                          (let [value (get-test-value type-key  5 length)]
+                                            (if enum-type
+                                              (get enum-group value value)
+                                              value)))})
                            fields))))
 
 (deftest mavlink-1-0
@@ -81,15 +84,15 @@
       (when-let [msg-info (get (:messages-by-id mavlink) id)]
         (let [message (get-test-message msg-info)
               decoded-message (encode-roundtrip message)]
-          ;(println (str "-- Testing message " (:message-id message))) ; " :: " message))
-          (doseq [field (keys message)
-                  :let [result (if (number? (field message))
-                                 (when (number? (field decoded-message))
-                                   (== (field message) (field decoded-message)))
-                                 (= (field message) (field decoded-message)))]]
-            (is result
-              (str "message " (:message-id message) " field " field
-                   " failed: " (field message) " -> " (field decoded-message)))))))
+          ; (println (str "-- Testing message " (:message-id message))) ; " :: " message))
+;          (doseq [field (keys message)
+;                  :let [result (if (number? (field message))
+;                                 (when (number? (field decoded-message))
+;                                   (== (field message) (field decoded-message)))
+;                                 (= (field message) (field decoded-message)))]]
+          (is (compare-messages mavlink message decoded-message)
+            (str "Roundtrip failed.\n Sent msg: " message
+                 "\nReceived message: "decoded-message)))))
     (is (nil? @last-error)
         "None of the round trips should cause a failure."))
   (testing "automatic protocol change from MAVlink 1 to MAVlink 2"
@@ -115,14 +118,14 @@
     (let [statistics (:statistics channel)]
       (let [message {:message-id :bad-message-id}
             decoded-message (encode-oneway message)]
-        (is (and (== (:encode-failed @statistics) 1)
-                 (= :invalid-message-id (:cause (ex-data @last-error))))
+        (is (= :invalid-message-id (:cause (ex-data @last-error)))
             "Encode should fail due to bad message id"))
       (let [message {:message-id :heartbeat :type :bad-enum}]
         (encode-oneway message)
         (Thread/sleep 10)
-        (is (= :undefined-enum (:cause (ex-data @last-error)))
+        (is (= :invalid-enum (:cause (ex-data @last-error)))
             "Encode should fail due to bad message id"))
+      (println "RUTH YOU NEED TO ADD tests for invalid bitmasks and valid bitmasks")
 ; FIXME cannot run this test because this does not currentl cause a failure.
 ;      (let [message {:message-id :heartbeat :non-existent-field "NOPE"}
 ;            decoded-message (encode-roundtrip message)]

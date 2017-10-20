@@ -42,6 +42,43 @@
        (reduce conj [] (map #(get-test-value type-key %) (range length))))
      (get-test-value type-key i))))
 
+(defn get-test-bitmask
+  "Return a bitmask vector for encoding."
+  [enum-group]
+  (reduce #(let [[enum-value enum-key] %2]
+             (conj %1 enum-key))
+          []
+          (take 3 enum-group)))
+
+(defn compare-messages
+  "Compare two messages, pprint them if they are different and return false,
+   otherwise return true."
+  [mavlink sent-msg rcv-msg]
+  (let [{:keys [fields ext-fields]} ((:message-id sent-msg) (:messages-by-keyword mavlink))
+        all-fields (if ext-fields
+                     (concat fields ext-fields)
+                     fields)]
+    (reduce #(let [{:keys [name-key enum-type bitmask]} %2
+                   sent-val (name-key sent-msg)
+                   rcv-val (name-key rcv-msg)
+                   field-match (if bitmask
+                                 (if (number? sent-val)
+                                   (== sent-val (:raw-val rcv-val))
+                                   (loop [bit (first sent-val)
+                                          rest-bits (rest sent-val)]
+                                     (if (nil? bit)
+                                       true
+                                       (if-not ((:bit-set? rcv-val) bit)
+                                         false
+                                         (recur (first rest-bits)
+                                                (rest rest-bits))))))
+                                 (if (number? sent-val)
+                                   (== sent-val rcv-val)
+                                   (= sent-val rcv-val)))]
+               (or %1 field-match))
+            true
+            all-fields)))
+
 (defn mk-pipe
   []
   (let [pipe-in (PipedInputStream.)

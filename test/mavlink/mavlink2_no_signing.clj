@@ -71,29 +71,27 @@
   {:pre [msg-key
          (not (empty? fields))]}
   (merge {:message-id msg-key}
-         (apply merge (map #(let [{:keys [name-key type-key enum-type length]} %
-                                  value (get-test-value type-key  5 length)]
-                              {name-key (if enum-type
-                                          (get (enum-type (:enums-by-group mavlink))
-                                               value value)
-                                          value)})
+         (apply merge (map #(let [{:keys [name-key type-key enum-type length bitmask]} %
+                                  enum-group (when enum-type
+                                               (enum-type (:enums-by-group mavlink)))]
+                              {name-key (if (and bitmask enum-type)
+                                          (get-test-bitmask enum-group)
+                                          (let [value (get-test-value type-key  5 length)]
+                                            (if enum-type
+                                              (get enum-group value value)
+                                              value)))})
                            fields))))
 
 (deftest mavlink-2-0
   (testing "Message round trips MAVlink 1.0."
     (doseq [id (range 255)]
       (when-let [msg-info (get (:messages-by-id mavlink) id)]
-        (let [message (get-test-message msg-info)
-              decoded-message (encode-roundtrip message)]
-          ;(println (str "-- Testing message " (:message-id message))) ; " :: " message))
-          (doseq [field (keys message)
-                  :let [result (if (number? (field message))
-                                 (when (number? (field decoded-message))
-                                   (== (field message) (field decoded-message)))
-                                 (= (field message) (field decoded-message)))]]
-            (is result
-              (str "message " (:message-id message) " field " field
-                   " failed: " (field message) " -> " (field decoded-message))))))))
+      (let [message (get-test-message msg-info)
+            decoded-message (encode-roundtrip message)]
+        ;(println (str "-- Testing message " (:message-id message))) ; " :: " message))
+        (is (compare-messages mavlink message decoded-message)
+          (str "Roundtrip failed.\n Sent msg: " message
+               "\nReceived message: "decoded-message))))))
   (testing "automatic protocol change from MAVlink 1 to MAVlink 2"
     (let [statistics (:statistics channel)]
       (encode-oneway {:message-id :device-op-read})
@@ -114,18 +112,13 @@
     (println (str "There are " (count (vals (:messages-by-id mavlink))) " messages types."))
     (reset! last-error nil)
     (doseq [msg-info (vals (:messages-by-id mavlink))]
-        (let [message (get-test-message msg-info)
-              decoded-message (encode-roundtrip message)]
-          ; (println (str "-- Testing message " (:message-id message) " :: " message))
-          ; (pprint decoded-message)
-          (doseq [field (keys message)
-                  :let [result (if (number? (field message))
-                                 (when (number? (field decoded-message))
-                                   (== (field message) (field decoded-message)))
-                                 (= (field message) (field decoded-message)))]]
-            (is result
-              (str "message " (:message-id message) " field " field
-                   " failed: " (field message) " -> " (field decoded-message))))))
+      (let [message (get-test-message msg-info)
+            decoded-message (encode-roundtrip message)]
+        ; (println (str "-- Testing message " (:message-id message) " :: " message))
+        ; (pprint decoded-message)
+        (is (compare-messages mavlink message decoded-message)
+          (str "Roundtrip failed.\n Sent msg: " message
+               "\nReceived message: "decoded-message))))
 
       (is (nil? @last-error)
           "None of the round trips should cause a failure."))
