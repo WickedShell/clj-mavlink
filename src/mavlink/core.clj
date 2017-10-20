@@ -334,8 +334,6 @@
                   (if (neg? difference)
                     (+ difference 255)
                     difference))]
-    (println (str "last seq id: " last-seq-id " new message sequence id: " sequence-id
-                  " number skipped: " skipped))
     (aset last-seq-ids system-id sequence-id)
     (swap! statistics assoc :messages-decoded (inc messages-decoded)
                             :messages-skipped (+ skipped messages-skipped))))
