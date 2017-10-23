@@ -23,12 +23,14 @@
   "Given a message map, encode it. But don't poll for the result because
    an error is expected."
   [message]
+  ; (println "ENCODING oneway :") (pprint message)
   (async/>!! encode-input-channel message))
 
 (defn encode-roundtrip
   "Given a message map, encode it then get the decoded and round robin it back to the encode
    and compare the result."
   [message]
+  ; (println "ENCODING roundtrip :") (pprint message)
   (async/>!! encode-input-channel message)
   (when-let [message-bytes (async/<!! encode-output-channel)]
     ; (println "The encoded bytes:")
@@ -65,7 +67,7 @@
   [{:keys [msg-key fields] :as message-spec}]
   {:pre [msg-key
          (not (empty? fields))]}
-  (merge {:message-id msg-key}
+  (merge {:message'id msg-key}
          (apply merge (map #(let [{:keys [name-key type-key enum-type length bitmask]} %
                                   enum-group (when enum-type
                                                (enum-type (:enums-by-group mavlink)))]
@@ -84,7 +86,7 @@
       (when-let [msg-info (get (:messages-by-id mavlink) id)]
         (let [message (get-test-message msg-info)
               decoded-message (encode-roundtrip message)]
-          ; (println (str "-- Testing message " (:message-id message))) ; " :: " message))
+          ; (println (str "-- Testing message " (:message'id message))) ; " :: " message))
 ;          (doseq [field (keys message)
 ;                  :let [result (if (number? (field message))
 ;                                 (when (number? (field decoded-message))
@@ -97,15 +99,15 @@
         "None of the round trips should cause a failure."))
   (testing "automatic protocol change from MAVlink 1 to MAVlink 2"
     (let [statistics (:statistics channel)]
-      (encode-oneway {:message-id :device-op-read})
+      (encode-oneway {:message'id :device-op-read})
       (Thread/sleep 1) ; give the encode a thread an opportunity to run
       (is  (and (== 1 (:bad-protocol @statistics))
                (= :bad-protocol (:cause (ex-data @last-error))))
           "MAVlink 2 only message should fail to encode due to bad protocol")
-      (let [decoded-message (encode-roundtrip {:message-id :heartbeat :mavlink-protocol :mavlink2})]
+      (let [decoded-message (encode-roundtrip {:message'id :heartbeat :mavlink'protocol :mavlink2})]
         (is decoded-message
             "Failed to send MAVlink 2 heartbeat"))
-      (let [decoded-message (encode-roundtrip {:message-id :device-op-read})]
+      (let [decoded-message (encode-roundtrip {:message'id :device-op-read})]
         (is decoded-message
           "Failed to send MAVlink 2 only test message"))
       (is (== 1 (:bad-protocol @(:statistics channel)))
@@ -116,18 +118,18 @@
 (deftest message-encode-errors
   (testing "Message encoding erros."
     (let [statistics (:statistics channel)]
-      (let [message {:message-id :bad-message-id}
+      (let [message {:message'id :bad-message-id}
             decoded-message (encode-oneway message)]
         (is (= :invalid-message-id (:cause (ex-data @last-error)))
             "Encode should fail due to bad message id"))
-      (let [message {:message-id :heartbeat :type :bad-enum}]
+      (let [message {:message'id :heartbeat :type :bad-enum}]
         (encode-oneway message)
         (Thread/sleep 10)
         (is (= :invalid-enum (:cause (ex-data @last-error)))
             "Encode should fail due to bad message id"))
       (println "RUTH YOU NEED TO ADD tests for invalid bitmasks and valid bitmasks")
 ; FIXME cannot run this test because this does not currentl cause a failure.
-;      (let [message {:message-id :heartbeat :non-existent-field "NOPE"}
+;      (let [message {:message'id :heartbeat :non-existent-field "NOPE"}
 ;            decoded-message (encode-roundtrip message)]
 ;        (Thread/sleep 10)
 ;        (is (= :encode-fn-failed (:cause (ex-data @last-error)))

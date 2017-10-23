@@ -34,6 +34,17 @@
                            :type s
                            :input length})))))))
 
+(defn mk-field-map
+  "Given the field's values, create the map."
+  [{:keys [enum name type display]}]
+  {:fld-name name
+   :name-key (keywordize name)
+   :type-key (get-type type)
+   :enum-type (when enum
+                (keywordize enum))
+   :bitmask (= "bitmask" display) 
+   :length (get-array-length type)})
+
 (defn get-fields
   "Returns just the fields of a message; or nil if there are none.
    While using extentions tag as a separator, this function looks to
@@ -43,26 +54,12 @@
   (if-let [node (zip-xml/xml1-> m :extensions)]
     (remove nil? 
             (mapv #(when (= (:tag %) :field)
-                     (let [{:keys [enum name type display]} (:attrs % first)]
-                       {:fld-name name
-                        :name-key (keyword name)
-                        :type-key (get-type type)
-                        :enum-type (when enum
-                                     (keywordize enum))
-                        :bitmask (= "bitmask" display) 
-                        :length (get-array-length type) }))
+                     (mk-field-map (:attrs % first)))
                   (zip/lefts node)))
     (vec
       (zip-xml/xml-> m :field
         (fn [f]
-          (let [{:keys [enum name type display]} (-> f first :attrs)]
-            {:fld-name name
-             :name-key (keyword name)
-             :type-key (get-type type)
-             :enum-type (when enum
-                          (keywordize enum))
-             :bitmask (= "bitmask" display) 
-             :length (get-array-length type) }))))))
+          (mk-field-map (-> f first :attrs)))))))
 
 (defn get-extension-fields
   "Returns just the extension fields of a message; or nil if there are none."
@@ -71,15 +68,7 @@
     (when-let [ext-fields (zip/rights node)]
       (vec
         (for [f ext-fields]
-          (let [{:keys [enum name type display]} (:attrs f)]
-            {:fld-name name
-             :name-key (keyword name)
-             :type-key (get-type type)
-             :enum-type (when enum
-                          (keywordize enum))
-             :bitmask (= "bitmask" display) 
-             :length (get-array-length type)
-             }))))))
+          (mk-field-map (:attrs f)))))))
 
 (defn sort-fields
   "Take a vector of fields and return them in a vector sorted based on

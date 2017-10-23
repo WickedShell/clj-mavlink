@@ -47,8 +47,8 @@
          (instance? Long system-id)
          (instance? Long component-id)
          ]}
-  (let [^long sys-id (or (:system-id message) system-id)
-        ^long comp-id (or (:component-id message) component-id)
+  (let [^long sys-id (or (:system'id message) system-id)
+        ^long comp-id (or (:component'id message) component-id)
         payload (let [byte-buffer (ByteBuffer/allocate payload-size)]
                   (.order byte-buffer ByteOrder/LITTLE_ENDIAN)
                   byte-buffer)
@@ -150,9 +150,9 @@
          (instance? Long system-id)
          (instance? Long component-id)
          ]}
-  (let [^long sys-id (or (:system-id message) system-id)
-        ^long comp-id (or (:component-id message) component-id)
-        ^long link-id (or (:link-id message) link-id)
+  (let [^long sys-id (or (:system'id message) system-id)
+        ^long comp-id (or (:component'id message) component-id)
+        ^long link-id (or (:link'id message) link-id)
         payload (let [byte-buffer (ByteBuffer/allocate extension-payload-size)]
                   (.order byte-buffer ByteOrder/LITTLE_ENDIAN)
                   byte-buffer)
@@ -256,17 +256,17 @@
       (when @continue
         (when message
           ; not shutting down and message to encode received
-          ; look up the message-info based on the :message-id of the message
-          (if-let [message-info ((:message-id message)
+          ; look up the message-info based on the :message'id of the message
+          (if-let [message-info ((:message'id message)
                                  (:messages-by-keyword mavlink))]
             (try
               ; calculate the sequence id then encode the message
               ; don't update the mavlink sequence id until after message is sent
-              (let [msg-seq-id (:sequence-id message)
+              (let [msg-seq-id (:sequence'id message)
                     new-seq-id (if msg-seq-id
                                  (mod msg-seq-id 256)
                                  (mod (inc @sequence-id) 256))]
-                (if-let [packed (case (or (:mavlink-protocol message)
+                (if-let [packed (case (or (:mavlink'protocol message)
                                           @protocol)
                                     :mavlink1
                                       (if (>= (:msg-id message-info) 256)
@@ -308,7 +308,7 @@
                                             (= (:error err-data) :encode-failed))
                                      (report-error e)
                                      (throw e)))))
-             ; message failed to encode because invalid :message-id
+             ; message failed to encode because invalid :message'id
              (do
                (swap! statistics update-in [:encode-failed] inc)
                (when report-error
@@ -346,7 +346,7 @@
    buffer - the buffer to decode
    statistics - the statistics atom
    "
-  [{:keys [system-id sequence-id] :as message}
+  [{:keys [system'id sequence'id] :as message}
    decode-fns
    ^ByteBuffer buffer
    statistics]
@@ -358,7 +358,7 @@
                   (reduce (fn [message decode-fn] (decode-fn buffer message))
                           (transient message)
                           decode-fns))]
-    (update-decode-statistics system-id sequence-id statistics)
+    (update-decode-statistics system'id sequence'id statistics)
     message))
 
 (defn- decode-mavlink2
@@ -378,7 +378,7 @@
    msg-payload-sie - the payload size of the message
    statistics - the statistics atom
    "
-  [{:keys [system-id sequence-id] :as message}
+  [{:keys [system'id sequence'id] :as message}
    message-info
    ^ByteBuffer buffer
    msg-payload-size
@@ -400,7 +400,7 @@
                                        (transient message)
                                        (concat decode-fns
                                                extension-decode-fns)))]
-      (update-decode-statistics system-id sequence-id statistics)
+      (update-decode-statistics system'id sequence'id statistics)
       message)))
 
  (defn- try-secret-key
@@ -712,12 +712,12 @@
                                  msg-payload-size
                                  input-stream
                                  output-channel 
-                                 {:message-id (:msg-key message-info)
-                                  :sequence-id
+                                 {:message'id (:msg-key message-info)
+                                  :sequence'id
                                     (byte-to-long (new Long (.get buffer 4)))
-                                  :system-id
+                                  :system'id
                                     (byte-to-long (new Long (.get buffer 5)))
-                                  :component-id
+                                  :component'id
                                     (byte-to-long (new Long (.get buffer 6)))}
                                  message-info
                                  statistics)
@@ -806,12 +806,12 @@
                                  msg-payload-size
                                  input-stream
                                  output-channel
-                                 {:message-id (:msg-key message-info)
-                                  :sequence-id
+                                 {:message'id (:msg-key message-info)
+                                  :sequence'id
                                     (byte-to-long (new Long (.get buffer 2)))
-                                  :system-id
+                                  :system'id
                                     (byte-to-long (new Long (.get buffer 3)))
-                                  :component-id
+                                  :component'id
                                     (byte-to-long (new Long (.get buffer 4)))}
                                  message-info
                                  statistics)
@@ -953,10 +953,10 @@
      current protocol is MAVlink 2. Or the message is unsigned when it should
      be signed. Of it is signed and no key was found to decode it. The handler
      is called with one argument, a message map with the following fields:
-                                      :message-id       - from the message
-                                      :sequence-id      - from the message
-                                      :system-id        - from the message
-                                      :component-id     - from the message
+                                      :message'id       - from the message
+                                      :sequence'id      - from the message
+                                      :system'id        - from the message
+                                      :component'id     - from the message
                                       :current-protocol - :mavlink1 or :mavlink2
                                       :signed-message   - true or false
      The handler should return true if the message should be accepted,
@@ -1102,7 +1102,7 @@
                                 statistics)
         ; when the state machine stops, output the state of the signing tuples
         (async/>!! decode-output-channel
-                   {:message-id :SigningTuples
+                   {:message'id :SigningTuples
                     :signing-tuples (:signing-tuples channel)})
         ; shutdown the encode thread normally
         (shutdown-fn nil)

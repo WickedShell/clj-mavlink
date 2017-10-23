@@ -54,7 +54,7 @@
   "Compare two messages, pprint them if they are different and return false,
    otherwise return true."
   [mavlink sent-msg rcv-msg]
-  (let [{:keys [fields ext-fields]} ((:message-id sent-msg) (:messages-by-keyword mavlink))
+  (let [{:keys [fields ext-fields]} ((:message'id sent-msg) (:messages-by-keyword mavlink))
         all-fields (if ext-fields
                      (concat fields ext-fields)
                      fields)]

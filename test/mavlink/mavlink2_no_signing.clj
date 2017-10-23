@@ -70,7 +70,7 @@
   [{:keys [msg-key fields] :as message-spec}]
   {:pre [msg-key
          (not (empty? fields))]}
-  (merge {:message-id msg-key}
+  (merge {:message'id msg-key}
          (apply merge (map #(let [{:keys [name-key type-key enum-type length bitmask]} %
                                   enum-group (when enum-type
                                                (enum-type (:enums-by-group mavlink)))]
@@ -88,20 +88,20 @@
       (when-let [msg-info (get (:messages-by-id mavlink) id)]
       (let [message (get-test-message msg-info)
             decoded-message (encode-roundtrip message)]
-        ;(println (str "-- Testing message " (:message-id message))) ; " :: " message))
+        ;(println (str "-- Testing message " (:message'id message))) ; " :: " message))
         (is (compare-messages mavlink message decoded-message)
           (str "Roundtrip failed.\n Sent msg: " message
                "\nReceived message: "decoded-message))))))
   (testing "automatic protocol change from MAVlink 1 to MAVlink 2"
     (let [statistics (:statistics channel)]
-      (encode-oneway {:message-id :device-op-read})
+      (encode-oneway {:message'id :device-op-read})
       (Thread/sleep 1) ; give the encode a thread an opportunity to run
       (is (== 1 (:bad-protocol @statistics))
           "MAVlink 2 only message should fail to encode due to bad protocol")
-      (let [decoded-message (encode-roundtrip {:message-id :heartbeat :mavlink-protocol :mavlink2})]
+      (let [decoded-message (encode-roundtrip {:message'id :heartbeat :mavlink'protocol :mavlink2})]
         (is decoded-message
             "Failed to send MAVlink 2 heartbeat"))
-      (let [decoded-message (encode-roundtrip {:message-id :device-op-read})]
+      (let [decoded-message (encode-roundtrip {:message'id :device-op-read})]
         (is decoded-message
           "Failed to send MAVlink 2 only test message"))
       (is (== 1 (:bad-protocol @(:statistics channel)))
@@ -114,7 +114,7 @@
     (doseq [msg-info (vals (:messages-by-id mavlink))]
       (let [message (get-test-message msg-info)
             decoded-message (encode-roundtrip message)]
-        ; (println (str "-- Testing message " (:message-id message) " :: " message))
+        ; (println (str "-- Testing message " (:message'id message) " :: " message))
         ; (pprint decoded-message)
         (is (compare-messages mavlink message decoded-message)
           (str "Roundtrip failed.\n Sent msg: " message
