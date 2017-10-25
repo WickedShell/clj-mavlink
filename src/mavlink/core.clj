@@ -1125,3 +1125,9 @@
     ; Return a map holding the statistics atom and the close-channel function
     {:statistics statistics
      :close-channel-fn #(shutdown-fn nil)}))
+
+(defn get-enum
+  "Look up value in an enum group and return the enum-key for that value.
+   nil in case of error."
+  [mavlink group-id v]
+  (get-in mavlink [:enums-by-group group-id v]))
