@@ -178,7 +178,7 @@
           (fn decode-it [buffer message]
             (assoc! message name-key (let [v (if (and bitmask
                                                       (= type-key :uint64_t))
-                                               (.longValue (read-fn buffer))
+                                               (.longValue ^clojure.lang.BigInt (read-fn buffer))
                                                (read-fn buffer))]
                                        (if (and bitmask enum-type)
                                          ; bit-set? will return boolean true or false

@@ -3,7 +3,7 @@
             [mavlink.checksum :refer :all]
             [mavlink.type :refer [byte-to-long]]
             [mavlink.mavlink_xml :refer :all])
-  (:import [java.io InputStream OutputStream]
+  (:import [java.io InputStream OutputStream DataOutputStream]
            [java.nio ByteBuffer ByteOrder]
            [java.security MessageDigest]
            [java.lang System]))
@@ -25,6 +25,17 @@
 
 (defonce ^:const BUFFER-SIZE (+ MAVLINK2-HDR-CRC-SIGN-SIZE 256))
 (defonce ^:const ONE-MINUTE 6000000)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Telemetry Log functions
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; FIXME this should be a macro but I don;t get macros
+(defn write-tlog
+  "Write timestamp and packet to DataOutputStream."
+  [^DataOutputStream tlog ^bytes packet length]
+  (.writeLong tlog (quot (System/nanoTime) 1000))
+  (.write tlog packet 0 length))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Encode support functions
@@ -242,7 +253,7 @@
                  a clojue channel to put the messages to
    "
   ^bytes [{:keys [mavlink continue protocol report-error
-                  signing-options statistics] :as channel}
+                  signing-options statistics tlog-stream] :as channel}
           input-channel
           output-link]
   {:pre [(instance? clojure.lang.Atom statistics)
@@ -266,7 +277,7 @@
                     new-seq-id (if msg-seq-id
                                  (mod msg-seq-id 256)
                                  (mod (inc @sequence-id) 256))]
-                (if-let [packed (case (or (:mavlink'protocol message)
+                (if-let [packet (case (or (:mavlink'protocol message)
                                           @protocol)
                                     :mavlink1
                                       (if (>= (:msg-id message-info) 256)
@@ -285,14 +296,22 @@
                                                        message message-info)
                                       )]
                   ; message successfully encoded,
-                  ; update statistics and send it out
                   (do
-                    (swap! statistics update-in [:messages-encoded] inc)
+                    ; write the packet out
                     (if link-is-stream
                       (do
-                        (.write ^OutputStream output-link ^bytes packed)
+                        (.write ^OutputStream output-link ^bytes packet)
                         (.flush ^OutputStream output-link))
-                      (async/>!! output-link packed))
+                      (async/>!! output-link packet))
+                    ;
+                    ;update the statistics
+                    (swap! statistics update-in [:messages-encoded] inc)
+                    ;
+                    ; write the tlog
+                    (when tlog-stream
+                      (locking tlog-stream
+                        (write-tlog tlog-stream packet (count packet))))
+                    ;
                     ; now update mavlink sequence id
                     (vreset! sequence-id new-seq-id))
                   ; message failed to encode due to error in encode function
@@ -327,14 +346,14 @@
 (defn update-decode-statistics
   [system-id sequence-id statistics]
   (let [{:keys [last-seq-ids messages-decoded messages-skipped]} @statistics
-        last-seq-id (aget last-seq-ids system-id)
+        last-seq-id (aget ^ints last-seq-ids system-id)
         difference (- sequence-id (mod (inc last-seq-id) 256))
         skipped (if (neg? last-seq-id)
                   0
                   (if (neg? difference)
                     (+ difference 255)
                     difference))]
-    (aset last-seq-ids system-id sequence-id)
+    (aset ^ints last-seq-ids system-id (int sequence-id))
     (swap! statistics assoc :messages-decoded (inc messages-decoded)
                             :messages-skipped (+ skipped messages-skipped))))
 
@@ -535,24 +554,19 @@
             ^InputStream input-stream
             ^ByteBuffer buffer
             num-bytes]
-  (if-let [buffer-array (.array buffer)]
-    (loop [num-bytes-read (.read input-stream
-                                 buffer-array
-                                 (.position buffer)
-                                 num-bytes)]
-      (swap! statistics update-in [:bytes-read] #(+ num-bytes-read %))
-      (if (neg? num-bytes-read) ; end of stream has been reached
-        false
-        (do
-          (.position buffer (+ (.position buffer) num-bytes))
-          (if (== num-bytes num-bytes-read)
-            true
-            (recur (+ num-bytes-read
-                    (.read input-stream
-                           buffer-array
-                           (.position buffer)
-                           (- num-bytes num-bytes-read))))))))
-    false))
+  (let [buffer-array (.array buffer)
+        num-bytes-read (.read input-stream
+                              buffer-array
+                              (.position buffer)
+                              num-bytes)]
+    (if (neg? num-bytes-read) ; end of stream has been reached
+      false
+      (do
+        (swap! statistics update-in [:bytes-read] #(+ num-bytes-read %))
+        (.position buffer (+ (.position buffer) num-bytes-read))
+        (if (>= num-bytes-read num-bytes)
+          true
+          (recur statistics input-stream buffer (- num-bytes num-bytes-read)))))))
 
 (defn- verify-checksum
   "Given a buffer, the crc seed, and the position of lsb of checksum in the 
@@ -588,7 +602,7 @@
    message-info - mavlink message information for message in buffer
    statistics - statistics
    "
-  [{:keys [encode-timestamp signing-options protocol] :as channel}
+  [{:keys [encode-timestamp signing-options protocol tlog-stream] :as channel}
    ^ByteBuffer buffer
    payload-size
    ^InputStream input-stream
@@ -605,7 +619,7 @@
                         (+ payload-size 2 MAVLINK2-SIGN-SIZE)
                         ; read only the payload and CRC
                         (+ payload-size 2))
-        bytes-in-message (+ MAVLINK2-HDR-SIZE bytes-to-read)
+        bytes-in-message (+ MAVLINK2-HDR-CRC-SIZE bytes-to-read)
         ]
     (when (read-bytes statistics input-stream buffer bytes-to-read)
 
@@ -628,8 +642,8 @@
                                  (when accept-message-handler
                                    (accept-message-handler
                                      (assoc message
-                                            :signed-message signed-message
-                                            :current-protocol @protocol)))))
+                                            :signed'message signed-message
+                                            :current'protocol @protocol)))))
               okay-to-decode (case @protocol
                                :mavlink1
                                  (when (or (not signed-message)
@@ -646,20 +660,24 @@
                                          false))))]
           ; if okay to decode
           (when okay-to-decode
-            ; okay to decode, decode the message
-            (if-let [message
-                       (decode-mavlink2 (assoc message
-                                               :signed-message signed-message)
-                                        message-info
-                                        buffer
-                                        payload-size
-                                        statistics)]
-                (do
-                  (swap! statistics update-in
-                         [:bytes-decoded] #(+ bytes-in-message %))
-                  (async/>!! output-channel message))
-                ; failed to decode the message
-                (swap! statistics update-in [:decode-failed] inc))))
+            (do
+              ; decode and output the message
+              (async/>!! output-channel
+                         (decode-mavlink2 (assoc message
+                                                 :signed'message signed-message)
+                                          message-info
+                                          buffer
+                                          payload-size
+                                          statistics))
+              ; FIXME how to handle MAVLink 2 messages, write as received with or without signature,
+              ; before or after trimmed 0's are replaced.
+              ; write telemetry log
+              ;(when tlog-stream
+              ;  (locking tlog-stream
+              ;    (write-tlog tlog-steam (.array buffer) bytes-in-message)))
+              ;
+              ; update statistics
+              (swap! statistics update-in [:bytes-decoded] #(+ bytes-in-message %)))))
         ; update statistics on messages dropped due to bad checksums
         (swap! statistics update-in [:bad-checksums] inc)))
       ; regardless of what happened, go to the start state
@@ -737,7 +755,7 @@
    message-info - mavlink message information for message in buffer
    statistics - statistics
    "
-  [{:keys [protocol] :as channel}
+  [{:keys [protocol tlog-stream] :as channel}
    ^ByteBuffer buffer
    payload-size
    ^InputStream input-stream
@@ -755,11 +773,20 @@
           (case @protocol
             :mavlink1
               (do
+                ; decode and output the message
                 (async/>!! output-channel
                            (decode-mavlink1 message
                                             (:decode-fns message-info)
                                             buffer
                                             statistics))
+                ; write telemetry log
+                (when tlog-stream
+                  (locking tlog-stream
+                    (write-tlog tlog-stream
+                                (.array buffer)
+                                (+ MAVLINK1-HDR-CRC-SIZE payload-size))))
+                ;
+                ; update statistics
                 (swap! statistics update-in
                        [:bytes-decoded] #(+ % MAVLINK1-HDR-SIZE bytes-to-read)))
             :mavlink2
@@ -957,8 +984,8 @@
                                       :sequence'id      - from the message
                                       :system'id        - from the message
                                       :component'id     - from the message
-                                      :current-protocol - :mavlink1 or :mavlink2
-                                      :signed-message   - true or false
+                                      :current'protocol - :mavlink1 or :mavlink2
+                                      :signed'message   - true or false
      The handler should return true if the message should be accepted,
      false otherwise.
 
@@ -974,9 +1001,6 @@
      encode-output-link    - either an output stream to write the encoded bytes to
                              or a channel to write the encoded byte array to
                              (anything else will cause an exception)
-     report-error          - function to report non-fatal errors, particularly
-                             encoding errors, is passed an Exception output from
-                             ex-info (which details the error)
      exception-handler     - exception handler function,
                              if nil the exception is thrown
                              otherwise this function is called with the exception
@@ -986,6 +1010,9 @@
      protocol              - the encode protocol to use
                              :mavlink1 - decode mavlink1 ignore mavlink2 messages
                              :mavlink2 - decode mavlink2 using signing options
+     report-error          - function to report non-fatal errors, particularly
+                             encoding errors, is passed an Exception output from
+                             ex-info (which details the error)
      signing-options {
          secret-key        - The current secret-key to use to encode, the
                              first key to try when decoding signed messages.
@@ -1004,6 +1031,8 @@
                                   protocol.
          }
      system-id             - the encode system id
+     tlog-stream           - OutputStream to write telemetry log to. Should be nil if
+                             no telemetry log is desired.
 
    For encodingMAVLink 2.0:
      The system-id and component-id are taken from the channel, but maybe
@@ -1020,12 +1049,13 @@
                    decode-output-channel
                    encode-input-channel
                    encode-output-link
-                   report-error
                    exception-handler
                    link-id
                    protocol
+                   report-error
                    signing-options
-                   system-id] :as options}]
+                   system-id
+                   tlog-stream] :as options}]
   {:pre [(instance? Long system-id)
          (instance? Long component-id)
          (instance? InputStream decode-input-stream)
@@ -1037,6 +1067,8 @@
          (keyword? protocol)
          (map? (:messages-by-keyword mavlink))
          (map? (:messages-by-id mavlink))
+         (or (nil? tlog-stream)
+             (instance? java.io.OutputStream tlog-stream))
          ]}
   ; start with a buffer size bigger then is possible
   (let [buffer (ByteBuffer/allocate BUFFER-SIZE)
@@ -1047,7 +1079,6 @@
                           :messages-skipped 0
                           :messages-encoded 0
                           :encode-failed 0
-                          :decode-failed 0
                           :bad-checksums 0
                           :bad-protocol 0
                           :bad-signatures 0
@@ -1073,6 +1104,8 @@
                  :signing-options signing-options-map
                  :statistics statistics
                  :system-id system-id
+                 :tlog-stream (when tlog-stream
+                                (DataOutputStream. tlog-stream))
                  }
         shutdown-fn (fn[e]
                       ; This function can be called by the application
@@ -1107,7 +1140,8 @@
         ; shutdown the encode thread normally
         (shutdown-fn nil)
         (catch Exception e (shutdown-fn (ex-info "clj-mavlink decode thread Exception"
-                                                 {:cause :decode}
+                                                 {:cause :decode
+                                                  :exception e}
                                                  e)))))
 
     (async/thread    ; encoding thread
