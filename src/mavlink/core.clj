@@ -619,7 +619,7 @@
                         (+ payload-size 2 MAVLINK2-SIGN-SIZE)
                         ; read only the payload and CRC
                         (+ payload-size 2))
-        bytes-in-message (+ MAVLINK2-HDR-CRC-SIZE bytes-to-read)
+        bytes-in-message (+ MAVLINK2-HDR-SIZE bytes-to-read)
         ]
     (when (read-bytes statistics input-stream buffer bytes-to-read)
 
@@ -661,6 +661,12 @@
           ; if okay to decode
           (when okay-to-decode
             (do
+              ; write telemetry log first (because decode-mavlink2 will replace the
+              ; trimmed zero bytes in the buffer, overwriting the packet as received.
+              (when tlog-stream
+                (locking tlog-stream
+                  (write-tlog tlog-stream (.array buffer) bytes-in-message)))
+              ;
               ; decode and output the message
               (async/>!! output-channel
                          (decode-mavlink2 (assoc message
@@ -669,12 +675,6 @@
                                           buffer
                                           payload-size
                                           statistics))
-              ; FIXME how to handle MAVLink 2 messages, write as received with or without signature,
-              ; before or after trimmed 0's are replaced.
-              ; write telemetry log
-              ;(when tlog-stream
-              ;  (locking tlog-stream
-              ;    (write-tlog tlog-steam (.array buffer) bytes-in-message)))
               ;
               ; update statistics
               (swap! statistics update-in [:bytes-decoded] #(+ bytes-in-message %)))))
