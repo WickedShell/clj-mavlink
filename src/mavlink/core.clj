@@ -30,7 +30,6 @@
 ;; Telemetry Log functions
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-; FIXME this should be a macro but I don;t get macros
 (defmacro write-tlog
   "Write timestamp and packet to DataOutputStream."
   [^DataOutputStream tlog ^bytes packet length]
