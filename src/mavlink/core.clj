@@ -32,7 +32,7 @@
 
 (defmacro write-tlog
   "Write timestamp and packet to DataOutputStream."
-  [^DataOutputStream tlog ^bytes packet length]
+  [tlog packet length]
   `(do
      (.writeLong ~tlog (quot (System/nanoTime) 1000))
      (.write ~tlog ~packet 0 ~length)))
@@ -253,7 +253,7 @@
                  a clojue channel to put the messages to
    "
   ^bytes [{:keys [mavlink continue protocol report-error
-                  signing-options statistics tlog-stream] :as channel}
+                  signing-options statistics ^DataOutputStream tlog-stream] :as channel}
           input-channel
           output-link]
   {:pre [(instance? clojure.lang.Atom statistics)
@@ -310,7 +310,7 @@
                     ; write the tlog
                     (when tlog-stream
                       (locking tlog-stream
-                        (write-tlog tlog-stream packet (count packet))))
+                        (write-tlog tlog-stream packet (count ^bytes packet))))
                     ;
                     ; now update mavlink sequence id
                     (vreset! sequence-id new-seq-id))
@@ -347,6 +347,8 @@
 
 (defn update-decode-statistics
   [system-id sequence-id statistics]
+  ; messages-decoded and messages-skipped per system id stored as array
+  ; FIXME need to go fix all updates to messages-decoded
   (let [{:keys [last-seq-ids messages-decoded messages-skipped]} @statistics
         last-seq-id (aget ^ints last-seq-ids system-id)
         difference (- sequence-id (mod (inc last-seq-id) 256))
@@ -604,7 +606,7 @@
    message-info - mavlink message information for message in buffer
    statistics - statistics
    "
-  [{:keys [encode-timestamp signing-options protocol tlog-stream] :as channel}
+  [{:keys [encode-timestamp signing-options protocol ^DataOutputStream tlog-stream] :as channel}
    ^ByteBuffer buffer
    payload-size
    ^InputStream input-stream
@@ -667,7 +669,7 @@
               ; trimmed zero bytes in the buffer, overwriting the packet as received.
               (when tlog-stream
                 (locking tlog-stream
-                  (write-tlog tlog-stream (.array buffer) bytes-in-message)))
+                  (write-tlog tlog-stream (.array ^ByteBuffer buffer) bytes-in-message)))
               ;
               ; decode and output the message
               (async/>!! output-channel
@@ -757,7 +759,7 @@
    message-info - mavlink message information for message in buffer
    statistics - statistics
    "
-  [{:keys [protocol tlog-stream] :as channel}
+  [{:keys [protocol ^DataOutputStream tlog-stream] :as channel}
    ^ByteBuffer buffer
    payload-size
    ^InputStream input-stream
@@ -785,7 +787,7 @@
                 (when tlog-stream
                   (locking tlog-stream
                     (write-tlog tlog-stream
-                                (.array buffer)
+                                (.array ^ByteBuffer buffer)
                                 (+ MAVLINK1-HDR-CRC-SIZE payload-size))))
                 ;
                 ; update statistics
