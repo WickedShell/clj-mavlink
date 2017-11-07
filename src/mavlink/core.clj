@@ -3,7 +3,7 @@
             [mavlink.checksum :refer :all]
             [mavlink.type :refer [byte-to-long]]
             [mavlink.mavlink_xml :refer :all])
-  (:import [java.io InputStream OutputStream DataOutputStream]
+  (:import [java.io InputStream OutputStream DataOutputStream IOException]
            [java.nio ByteBuffer ByteOrder]
            [java.security MessageDigest]
            [java.lang System]))
@@ -31,11 +31,12 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ; FIXME this should be a macro but I don;t get macros
-(defn write-tlog
+(defmacro write-tlog
   "Write timestamp and packet to DataOutputStream."
   [^DataOutputStream tlog ^bytes packet length]
-  (.writeLong tlog (quot (System/nanoTime) 1000))
-  (.write tlog packet 0 length))
+  `(do
+     (.writeLong ~tlog (quot (System/nanoTime) 1000))
+     (.write ~tlog ~packet 0 ~length)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Encode support functions
@@ -45,7 +46,7 @@
   "Encodes a MAVLink1 message.
 
    channel - the internal channel map
-   sequencce-id - the sequence id to use in the message
+   sequence-id - the sequence id to use in the message
    message - the message map as received from the application
    message-info - the mavlink message information
    "
@@ -143,7 +144,7 @@
    value 0 is used.
 
    channel - the internal channel map
-   sequencce-id - the sequence id to use in the message
+   sequence-id - the sequence id to use in the message
    secret-key - the secret-key holding the key to sign the packets with
    encode-sha256 - the MessageDigest for signing encoded messages
    message - the message map as received from the application
@@ -319,14 +320,16 @@
                     (swap! statistics update-in [:encode-failed] inc)
                     (when report-error
                       (report-error (ex-info "Encoding failed" 
-                                             {:cause :encode-fn-failed
+                                             {:cause :encode-failed
                                               :message message}))))))
-              (catch Exception e (let [err-data (ex-data e)]
-                                   (if (and report-error
-                                            err-data
-                                            (= (:error err-data) :encode-failed))
-                                     (report-error e)
-                                     (throw e)))))
+              (catch Exception e (if report-error
+                                   (report-error (if (ex-data e)
+                                                   e
+                                                   (ex-info "Encoding exception."
+                                                            {:cause :encode-failed
+                                                             :message message
+                                                             :exception e})))
+                                   (throw e))))
              ; message failed to encode because invalid :message'id
              (do
                (swap! statistics update-in [:encode-failed] inc)
@@ -543,7 +546,7 @@
 
    If the InputStream read operation throws an excception, that exception will
    be caught by the open channel decode thread call (i.e. see open-channel for
-   excception handling).
+   exception handling).
    
    statistics - the statistics
    input-stream - the stream to read the btes from
@@ -1004,15 +1007,18 @@
      exception-handler     - exception handler function,
                              if nil the exception is thrown
                              otherwise this function is called with the exception
-                             as the sole argument. 
+                             as the sole argument. Exception's generally will
+                             be an IException, the ex-data map will have :cause,
+                             :message (if the message is known), and :exception.
      link-id               - the encode link id, if not given and protocol 
                              is :mavlink2, then 0 is used
      protocol              - the encode protocol to use
                              :mavlink1 - decode mavlink1 ignore mavlink2 messages
                              :mavlink2 - decode mavlink2 using signing options
-     report-error          - function to report non-fatal errors, particularly
-                             encoding errors, is passed an Exception output from
-                             ex-info (which details the error)
+     report-error          - function to report non-fatal errors and exceptions,
+                             particularly encoding errors, it is passed an IException
+                             (see exception -handler for a description of the error
+                             data message map bindings.
      signing-options {
          secret-key        - The current secret-key to use to encode, the
                              first key to try when decoding signed messages.
@@ -1139,10 +1145,12 @@
                     :signing-tuples (:signing-tuples channel)})
         ; shutdown the encode thread normally
         (shutdown-fn nil)
+        (catch IOException e (shutdown-fn (ex-info "IOException occurred, probably due to shutdown of the link."
+                                                   {:cause :io-exception
+                                                    :exception e})))
         (catch Exception e (shutdown-fn (ex-info "clj-mavlink decode thread Exception"
                                                  {:cause :decode
-                                                  :exception e}
-                                                 e)))))
+                                                  :exception e})))))
 
     (async/thread    ; encoding thread
       (try
@@ -1153,8 +1161,8 @@
         ; shutdown the decode thread normally
         (shutdown-fn nil)
         (catch Exception e (shutdown-fn (ex-info "clj-mavlink encode thread Exception"
-                                                 {:cause :encode}
-                                                 e)))))
+                                                 {:cause :encode
+                                                  :exception e})))))
 
     ; Return a map holding the statistics atom and the close-channel function
     {:statistics statistics

@@ -348,7 +348,7 @@
                        :conflicts conflicts
                        :source source}))))
   {:enum-to-value (merge enum-to-value (:enum-to-value new-part))
-   :enums-by-group (merge enums-by-group (:enums-by-group new-part))})
+   :enums-by-group (merge-with merge enums-by-group (:enums-by-group new-part))})
 
 (defn add-mavlink-messages
   "Given two mavlink maps, merge the contents of the second with the first."
