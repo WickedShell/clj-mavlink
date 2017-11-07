@@ -135,7 +135,7 @@ are replaced with hyphens. Examples: `:heartbeat :sys-status :system-time`
 ##### fields
 
 fields are defined by their name attribute of the `<field>` tag. The field names are simply converted to keywords.
-Examples from the heartbeat message: `:custom_mode :type :autopilot :base_mode :system_status`
+Examples from the heartbeat message: `:custom-mode :type :autopilot :base-mode :system-status`
 
 Valid values are defined in the MAVLink specification, for example `uint16_t char[16] uint64_t int8_t`
 Because of the way clojure builds hash-maps, all numeric values will be held as boxed numbers, so there
@@ -194,11 +194,11 @@ and unless specified here, the sequence id is automatically calculated and added
 
 ```
 (let [msg message {:message-id :heartbeat
-                   :custom_mode 0
+                   :custom-mode 0
                    :type :mav-type-gcs
                    :autopilot :mav-autopilot-invalid
-                   :base_mode 0
-                   :system_status :mav-state-uninit})]
+                   :base-mode 0
+                   :system-status :mav-state-uninit})]
   (async/>!! autopilot-send msg))
 ```
 
