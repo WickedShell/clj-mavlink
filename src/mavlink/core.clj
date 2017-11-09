@@ -347,19 +347,19 @@
 
 (defn update-decode-statistics
   [system-id sequence-id statistics]
-  ; messages-decoded and messages-skipped per system id stored as array
-  ; FIXME need to go fix all updates to messages-decoded
   (let [{:keys [last-seq-ids messages-decoded messages-skipped]} @statistics
-        last-seq-id (aget ^ints last-seq-ids system-id)
-        difference (- sequence-id (mod (inc last-seq-id) 256))
-        skipped (if (neg? last-seq-id)
+        last-sys-seq-id (aget ^longs last-seq-ids system-id)
+        last-sys-decoded (aget ^longs messages-decoded system-id)
+        last-sys-skipped (aget ^longs messages-skipped system-id)
+        difference (- sequence-id (mod (inc last-sys-seq-id) 256))
+        skipped (if (neg? last-sys-seq-id)
                   0
                   (if (neg? difference)
                     (+ difference 255)
                     difference))]
-    (aset ^ints last-seq-ids system-id (int sequence-id))
-    (swap! statistics assoc :messages-decoded (inc messages-decoded)
-                            :messages-skipped (+ skipped messages-skipped))))
+    (aset ^longs last-seq-ids system-id sequence-id)
+    (aset ^longs messages-decoded system-id (inc last-sys-decoded))
+    (aset ^longs messages-skipped system-id (+ last-sys-skipped skipped))))
 
 (defn- decode-mavlink1
   "Decode a MAVLink 1.0 message in the channel's buffer Return a message
@@ -1081,9 +1081,9 @@
   (let [buffer (ByteBuffer/allocate BUFFER-SIZE)
         statistics (atom {:bytes-read 0
                           :bytes-decoded 0
-                          :messages-decoded 0
-                          :last-seq-ids (int-array 256 -1)
-                          :messages-skipped 0
+                          :messages-decoded (long-array 256 0)
+                          :last-seq-ids (long-array 256 -1)
+                          :messages-skipped (long-array 256 0)
                           :messages-encoded 0
                           :encode-failed 0
                           :bad-checksums 0
