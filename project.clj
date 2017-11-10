@@ -10,8 +10,7 @@
                  ]
   :profiles {:dev {:dependencies [ [criterium "0.4.4"] ]
                   :java-source-paths ["test/mavlink"
-                                      "src/java"
-                                      ]
+                                      "src/java"]
                   }
             }
   :plugins [[perforate "0.3.4"]]
