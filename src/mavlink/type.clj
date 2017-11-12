@@ -7,34 +7,34 @@
  [type-key]
   (condp = type-key
     :uint64_t 1
-    :int64_t 1
-    :double 1
+    :int64_t  1
+    :double   1
     :uint32_t 2
-    :int32_t 2
-    :float 2
+    :int32_t  2
+    :float    2
     :uint16_t 4
-    :int16_t 4
-    :uint8_t 5
+    :int16_t  4
+    :uint8_t  5
     :uint8_t_mavlink_version 5
-    :int8_t 5
-    :char 5
+    :int8_t   5
+    :char     5
     (throw (ex-info "Unknown priority type"
                     {:cause :unknown-type
                      :type type-key}))))
 
 ;; number of bytes for each type.
 (defonce type-size {:uint64_t 8
-                    :int64_t 8
-                    :double 8
+                    :int64_t  8
+                    :double   8
                     :uint32_t 4
-                    :int32_t 4
-                    :float 4
+                    :int32_t  4
+                    :float    4
                     :uint16_t 2
-                    :int16_t 2
-                    :uint8_t 1
+                    :int16_t  2
+                    :uint8_t  1
                     :uint8_t_mavlink_version 1
-                    :int8_t 1
-                    :char 1})
+                    :int8_t   1
+                    :char     1})
  
 (defonce UINT64-MAX-VALUE (.toBigInteger 18446744073709551615N))
 
@@ -64,7 +64,6 @@
     :char     (fn [^ByteBuffer wrtr value] (.put wrtr (byte value)))
     :int8_t   (fn [^ByteBuffer wrtr value] (.put wrtr (byte value)))
     :uint8_t  (fn [^ByteBuffer wrtr value] (.put wrtr (.byteValue (new Long (long value)))))
-    ; FIXME: this seems like a dirty hack forr providing the version, find a better way
     :uint8_t_mavlink_version  (fn [^ByteBuffer wrtr value] (.put wrtr (.byteValue (new Long 3))))
     :int16_t  (fn [^ByteBuffer wrtr value] (.putShort wrtr (short value)))
     :uint16_t (fn [^ByteBuffer wrtr value] (.putShort wrtr (.shortValue (new Long (long value)))))

@@ -346,20 +346,20 @@
 (declare start-state)
 
 (defn update-decode-statistics
-  [system-id sequence-id statistics]
-  (let [{:keys [last-seq-ids messages-decoded messages-skipped]} @statistics
-        last-sys-seq-id (aget ^longs last-seq-ids system-id)
-        last-sys-decoded (aget ^longs messages-decoded system-id)
-        last-sys-skipped (aget ^longs messages-skipped system-id)
+  [^long system-id ^long sequence-id statistics]
+  (let [{:keys [^longs last-seq-ids ^longs messages-decoded ^longs messages-skipped]} @statistics
+        last-sys-seq-id (aget last-seq-ids system-id)
+        last-sys-decoded (aget messages-decoded system-id)
+        last-sys-skipped (aget messages-skipped system-id)
         difference (- sequence-id (mod (inc last-sys-seq-id) 256))
         skipped (if (neg? last-sys-seq-id)
                   0
                   (if (neg? difference)
                     (+ difference 255)
                     difference))]
-    (aset ^longs last-seq-ids system-id sequence-id)
-    (aset ^longs messages-decoded system-id (inc last-sys-decoded))
-    (aset ^longs messages-skipped system-id (+ last-sys-skipped skipped))))
+    (aset last-seq-ids system-id sequence-id)
+    (aset messages-decoded system-id (inc last-sys-decoded))
+    (aset messages-skipped system-id (long (+ last-sys-skipped skipped)))))
 
 (defn- decode-mavlink1
   "Decode a MAVLink 1.0 message in the channel's buffer Return a message
