@@ -342,7 +342,7 @@
   [{:keys [enum-to-value enums-by-group]}
    {:keys [source] :as new-part}]
   (let [conflicts (filterv #(% enum-to-value) (keys (:enum-to-value new-part)))]
-    (when-not (empty? conflicts)
+    (when (seq conflicts)
       (throw (ex-info "Enum values conflict"
                       {:cause :enum-conflicts
                        :conflicts conflicts
@@ -355,13 +355,13 @@
   [{:keys [descriptions messages-by-keyword messages-by-id] :as mavlink}
    {:keys [source] :as new-part}]
   (let [conflicts (filterv #(get messages-by-id %) (keys (:messages-by-id new-part)))]
-    (when-not (empty? conflicts)
+    (when (seq conflicts)
       (throw (ex-info "Message ID's conflict"
                       {:cause :message-id-conflicts
                        :conflicts conflicts
                        :source source}))))
   (let [conflicts (filterv #(% messages-by-keyword) (keys (:messages-by-keyword new-part)))]
-    (when-not (empty? conflicts)
+    (when (seq conflicts)
       (throw (ex-info "Message names conflict"
                       {:cause :message-name-conflicts
                        :conflicts conflicts

@@ -664,24 +664,23 @@
                                          false))))]
           ; if okay to decode
           (when okay-to-decode
-            (do
-              ; write telemetry log first (because decode-mavlink2 will replace the
-              ; trimmed zero bytes in the buffer, overwriting the packet as received.
-              (when tlog-stream
-                (locking tlog-stream
-                  (write-tlog tlog-stream (.array ^ByteBuffer buffer) bytes-in-message)))
-              ;
-              ; decode and output the message
-              (async/>!! output-channel
-                         (decode-mavlink2 (assoc message
-                                                 :signed'message signed-message)
-                                          message-info
-                                          buffer
-                                          payload-size
-                                          statistics))
-              ;
-              ; update statistics
-              (swap! statistics update-in [:bytes-decoded] #(+ bytes-in-message %)))))
+            ; write telemetry log first (because decode-mavlink2 will replace the
+            ; trimmed zero bytes in the buffer, overwriting the packet as received.
+            (when tlog-stream
+              (locking tlog-stream
+                (write-tlog tlog-stream (.array ^ByteBuffer buffer) bytes-in-message)))
+            ;
+            ; decode and output the message
+            (async/>!! output-channel
+                       (decode-mavlink2 (assoc message
+                                               :signed'message signed-message)
+                                        message-info
+                                        buffer
+                                        payload-size
+                                        statistics))
+            ;
+            ; update statistics
+            (swap! statistics update-in [:bytes-decoded] #(+ bytes-in-message %))))
         ; update statistics on messages dropped due to bad checksums
         (swap! statistics update-in [:bad-checksums] inc)))
       ; regardless of what happened, go to the start state
