@@ -31,7 +31,7 @@
   "Compute the checksum of a string and return it or of
    of a array with an optional magic byte, or part of a byte
    array and an optional magic byte, and then return checksum."
-  ([^String s] (compute-checksum (ByteBuffer/wrap (.getBytes s)) 0 (count s) nil))
+  ([^bytes input] (compute-checksum (ByteBuffer/wrap input) 0 (alength input) nil))
   ([the-bytes crc-seed] (compute-checksum the-bytes 0 (count the-bytes) crc-seed))
   ([the-bytes start-idx last-idx crc-seed]
    (let [crc (if (= array-of-bytes-type (type the-bytes))

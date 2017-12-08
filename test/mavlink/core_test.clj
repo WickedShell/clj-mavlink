@@ -109,7 +109,7 @@
       (.order buffer ByteOrder/LITTLE_ENDIAN)
       ; note that compute-crc-checksum makes the magic byte for strings
       ; this is to make it as much like the Java MAVlink packet as possible.
-      (is (== (mk-crc-seed (compute-checksum s))
+      (is (== (mk-crc-seed (compute-checksum (.getBytes s)))
               (compute-crc-checksum s))
           "checksum string")
       (is (== (compute-crc-checksum some-bytes 0 len-byte-string nil)

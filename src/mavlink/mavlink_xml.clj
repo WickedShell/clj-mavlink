@@ -278,17 +278,20 @@
                                                     (* (type-key type-size) (or length 1)))
                                                  ext-fields))
                       crc-seed ; note that field names and their type names are used here
-                        (let [msg-seed (str msg-name " "
-                                            (apply str
-                                                   (map #(let [{:keys [fld-name type-key length]} %]
-                                                           (str (if (= type-key :uint8_t_mavlink_version)
-                                                                  "uint8_t"
-                                                                  (name type-key)) " "
-                                                                fld-name " "
-                                                                (when length
-                                                                  (char length))))
-                                                        fields)))
-                              checksum (compute-checksum msg-seed)]
+                        (let [msg-seed (concat (.getBytes (str msg-name " "))
+                                                (apply concat
+                                                       (map #(let [{:keys [fld-name type-key length]} %]
+                                                               (concat (.getBytes (format "%s %s "
+                                                                                          (if (= type-key :uint8_t_mavlink_version)
+                                                                                            "uint8_t"
+                                                                                            (name type-key))
+                                                                                          fld-name))
+                                                                       (when length
+                                                                         (byte-array [(if (> length 127)
+                                                                                        (byte (- length 256))
+                                                                                        (byte length))]))))
+                                                            fields)))
+                              checksum (compute-checksum (byte-array msg-seed))]
                           (bit-xor (bit-and checksum 0xFF)
                                    (bit-and (bit-shift-right checksum 8) 0xff)))
                       encode-fns (mapv #(gen-encode-fn % enums-by-group) fields)

@@ -79,6 +79,19 @@
                                               value)))})
                            fields))))
 
+(deftest byte-array-data
+  (testing "Encoding GPS-RTCM-DATA"
+    (let [cmd (.getBytes "soc, swiftgcsSync\n")
+          in {:message'id :gps-rtcm-data
+              :flags 0
+              :len (alength cmd)
+              :data cmd}
+          rtrp (encode-roundtrip in)]
+      (println "starting")
+    (println "\n\nEncoded" in "to" rtrp "\n\n")
+      (println "ended")
+    )))
+
 (deftest mavlink-1-0
   (testing "Message round trips."
     (reset! last-error nil)
@@ -116,26 +129,24 @@
   )
 
 (deftest message-encode-errors
-  (testing "Message encoding erros."
+  (testing "Message encoding errors."
     (let [statistics (:statistics channel)]
       (let [message {:message'id :bad-message-id}
             decoded-message (encode-oneway message)]
+        (Thread/sleep 500) ; give the encode a chance to run
         (is (= :invalid-message-id (:cause (ex-data @last-error)))
             "Encode should fail due to bad message id"))
       (let [message {:message'id :heartbeat :type :bad-enum}]
         (encode-oneway message)
-        (Thread/sleep 10)
+        (Thread/sleep 500) ; give the encode a chance to run
         (is (= :invalid-enum (:cause (ex-data @last-error)))
             "Encode should fail due to bad message id"))
       (println "RUTH YOU NEED TO ADD tests for invalid bitmasks and valid bitmasks")
-; FIXME cannot run this test because this does not currentl cause a failure.
+; FIXME cannot run this test because this does not currently cause a failure.
 ;      (let [message {:message'id :heartbeat :non-existent-field "NOPE"}
 ;            decoded-message (encode-roundtrip message)]
 ;        (Thread/sleep 10)
 ;        (is (= :encode-fn-failed (:cause (ex-data @last-error)))
 ;            "Encode should fail bad field."))
-
-      ; print the final statistics
-      (println "\n\nMavlink Statistics")
-      (pprint @statistics))
+      )
     ))
