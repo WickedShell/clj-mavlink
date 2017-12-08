@@ -79,19 +79,6 @@
                                               value)))})
                            fields))))
 
-(deftest byte-array-data
-  (testing "Encoding GPS-RTCM-DATA"
-    (let [cmd (.getBytes "soc, swiftgcsSync\n")
-          in {:message'id :gps-rtcm-data
-              :flags 0
-              :len (alength cmd)
-              :data cmd}
-          rtrp (encode-roundtrip in)]
-      (println "starting")
-    (println "\n\nEncoded" in "to" rtrp "\n\n")
-      (println "ended")
-    )))
-
 (deftest mavlink-1-0
   (testing "Message round trips."
     (reset! last-error nil)
