@@ -734,6 +734,7 @@
                                  input-stream
                                  output-channel 
                                  {:message'id (:msg-key message-info)
+                                  :protocol' :mavlink2
                                   :sequence'id
                                     (byte-to-long (new Long (.get buffer 4)))
                                   :system'id
@@ -837,6 +838,7 @@
                                  input-stream
                                  output-channel
                                  {:message'id (:msg-key message-info)
+                                  :protocol' :mavlink1
                                   :sequence'id
                                     (byte-to-long (new Long (.get buffer 2)))
                                   :system'id
