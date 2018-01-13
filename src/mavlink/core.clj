@@ -719,18 +719,15 @@
     (let [low-byte (byte-to-long (new Long (.get buffer 7)))
           middle-byte (byte-to-long (new Long (.get buffer 8)))
           high-byte (byte-to-long (new Long (.get buffer 9)))
-          {:keys [messages-by-id]} mavlink
           msg-id (+ (bit-and (bit-shift-left high-byte 16) 0xff0000)
                     (bit-and (bit-shift-left middle-byte 8) 0xff00)
                     (bit-and low-byte 0xff))
-          message-info (get messages-by-id msg-id)
-          msg-payload-size (byte-to-long (new Long (.get buffer 1)))]
+          message-info (get (:messages-by-id mavlink) msg-id)]
       ; select and then return function to execute the next state
-      (if (and message-info
-               (<= msg-payload-size (:extension-payload-size message-info)))
+      (if message-info
         #(mavlink2-payload-state channel
                                  buffer
-                                 msg-payload-size
+                                 (byte-to-long (new Long (.get buffer 1)))
                                  input-stream
                                  output-channel 
                                  {:message'id (:msg-key message-info)
