@@ -1144,8 +1144,9 @@
                     :signing-tuples (:signing-tuples channel)})
         ; shutdown the encode thread normally
         (shutdown-fn nil)
-        (catch IOException e (shutdown-fn (ex-info "IOException occurred, probably due to shutdown of the link."
+        (catch IOException e (shutdown-fn (ex-info "clj-mavlink IOException occurred, probably due to shutdown of the link."
                                                    {:cause :io-exception
+                                                    :thread "Mavlink Decode"
                                                     :exception e})))
         (catch Exception e (shutdown-fn (ex-info "clj-mavlink decode thread Exception"
                                                  {:cause :decode
@@ -1159,6 +1160,10 @@
                          encode-output-link)
         ; shutdown the decode thread normally
         (shutdown-fn nil)
+        (catch IOException e (shutdown-fn (ex-info "clj-mavlink IOException occurred, probably due to shutdown of the link."
+                                                   {:cause :io-exception
+                                                    :thread "Mavlink Encode"
+                                                    :exception e})))
         (catch Exception e (shutdown-fn (ex-info "clj-mavlink encode thread Exception"
                                                  {:cause :encode
                                                   :exception e})))))
