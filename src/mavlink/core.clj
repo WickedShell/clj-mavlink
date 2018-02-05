@@ -771,27 +771,28 @@
                              (:crc-seed message-info) 
                              ; compute checksum LSB
                              (+ MAVLINK1-HDR-SIZE payload-size))
-          (case @protocol
-            :mavlink1
-              (do
-                ; decode and output the message
-                (async/>!! output-channel
-                           (decode-mavlink1 message
-                                            (:decode-fns message-info)
-                                            buffer
-                                            statistics))
-                ; write telemetry log
-                (when tlog-stream
-                  (locking tlog-stream
-                    (write-tlog tlog-stream
-                                (.array ^ByteBuffer buffer)
-                                (+ MAVLINK1-HDR-CRC-SIZE payload-size))))
-                ;
-                ; update statistics
-                (swap! statistics update-in
-                       [:bytes-decoded] #(+ % MAVLINK1-HDR-SIZE bytes-to-read)))
-            :mavlink2
-              (swap! statistics update-in [:bad-protocol] inc))
+          (if (or (= @protocol :mavlink1)
+                  (and (= @protocol :mavlink2)
+                       (when-let [accept-message-handler (:accept-message-handler (:signing-options channel))]
+                         (accept-message-handler (assoc message :current'protocol @protocol)))))
+            (do
+              ; decode and output the message
+              (async/>!! output-channel
+                         (decode-mavlink1 message
+                                          (:decode-fns message-info)
+                                          buffer
+                                          statistics))
+              ; write telemetry log
+              (when tlog-stream
+                (locking tlog-stream
+                  (write-tlog tlog-stream
+                              (.array ^ByteBuffer buffer)
+                              (+ MAVLINK1-HDR-CRC-SIZE payload-size))))
+              ;
+              ; update statistics
+              (swap! statistics update-in
+                     [:bytes-decoded] #(+ % MAVLINK1-HDR-SIZE bytes-to-read)))
+            (swap! statistics update-in [:bad-protocol] inc))
           (swap! statistics update-in [:bad-checksums] inc)))))
   ; always return function to execute start-state
   #(start-state channel buffer input-stream output-channel statistics))
@@ -1177,3 +1178,9 @@
    nil in case of error."
   [mavlink group-id v]
   (get-in mavlink [:enums-by-group group-id v]))
+
+(defn get-enum-group
+  "Given a group id, return the map of key/values for that group."
+  [mavlink group-id]
+  (group-id (:enums-by-group mavlink)))
+
