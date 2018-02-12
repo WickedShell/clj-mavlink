@@ -1,4 +1,4 @@
-(ns mavlink.mavlink2-signing
+(ns mavlink.protocol
   (:require [clojure.test :refer :all]
             [clojure.java.io :as io]
             [clojure.core.async :as async]
@@ -19,19 +19,18 @@
 (def encode-input-channel  (async/chan 300))
 (def encode-output-channel (async/chan 300))
 
-(def secret-keyset [(bytes (byte-array (map (comp byte int) "000000abcdefghijklmnopqrstuvwxyz")))
-                    (bytes (byte-array (map (comp byte int) "abcdefghijklmnopqrstuvwxyz123456")))])
-
 (defn encode-oneway
-  "Given a message map, encode it. Bute don't poll for the result because
+  "Given a message map, encode it. But don't poll for the result because
    an error is expected."
   [message]
+  ; (println "ENCODING oneway :") (pprint message)
   (async/>!! encode-input-channel message))
 
 (defn encode-roundtrip
   "Given a message map, encode it then get the decoded and round robin it back to the encode
    and compare the result."
   [message]
+  ; (println "ENCODING roundtrip :") (pprint message)
   (async/>!! encode-input-channel message)
   (when-let [message-bytes (async/<!! encode-output-channel)]
     ; (println "The encoded bytes:")
@@ -51,15 +50,13 @@
                                      :system-id 99
                                      :component-id 88
                                      :link-id 77
+                                     :report-error #(reset! last-error %1)
                                      :decode-input-stream (:pipe-in decode-input-pipe)
                                      :decode-output-channel decode-output-channel
                                      :encode-input-channel encode-input-channel
                                      :encode-output-link encode-output-channel
-                                     :report-error #(reset! last-error %1)
                                      :exception-handler #(println "clj-mavlink/test exception:\n" %1)
-                                     :signing-options {:secret-key (get secret-keyset 0)
-                                                       :secret-keyset secret-keyset
-                                                       :accept-message-handler
+                                     :signing-options {:accept-message-handler
                                                               #(do
                                                                 (println "clj-mavlink/accept-message:\n" %1)
                                                                 true)
@@ -82,51 +79,63 @@
                                               value)))})
                            fields))))
 
-(deftest mavlink-2-0-signing
-  (testing "Message round trips MAVlink 1.0."
+(deftest mavlink-1
+  (testing "Message mavlink1 round trips."
+    (reset! last-error nil)
     (doseq [id (range 255)]
       (when-let [msg-info (get (:messages-by-id mavlink) id)]
         (let [message (get-test-message msg-info)
               decoded-message (encode-roundtrip message)]
-          ; (println (str "-- Testing message " (:message'id message))) ; " :: " message))
           (is (= (:protocol' decoded-message) :mavlink1)
               (str "Message protocol error. Sent msg: " message
                    "\nReceived message: " decoded-message))
           (is (compare-messages mavlink message decoded-message)
             (str "Roundtrip failed.\n Sent msg: " message
-                 "\nReceived message: "decoded-message))))))
+                 "\nReceived message: "decoded-message)))))
+    (is (nil? @last-error)
+        "None of the round trips should cause a failure."))
+
+  (testing "clj-mavlink message swap protocol to mavlink2"
+    (reset! last-error nil)
+    ; Swap to mavlink2 and resend all the messages.
+    (encode-oneway {:message'id :clj-mavlink
+                    :protocol :mavlink2})
+    (doseq [id (range 255)]
+      (when-let [msg-info (get (:messages-by-id mavlink) id)]
+        (let [message (get-test-message msg-info)
+              decoded-message (encode-roundtrip message)]
+          (is (= (:protocol' decoded-message) :mavlink2)
+              (str "Message protocol error. Sent msg: " message
+                   "\nReceived message: " decoded-message))
+          (is (compare-messages mavlink message decoded-message)
+              (str "Roundtrip failed.\n Sent msg: " message
+                   "\nReceived message: "decoded-message)))))
+    (is (nil? @last-error)
+        "None of the round trips should cause a failure."))
   (testing "automatic protocol change from MAVlink 1 to MAVlink 2"
     (let [statistics (:statistics channel)]
-      (encode-oneway {:message'id :device-op-read})
-      (Thread/sleep 1) ; give the encode a thread an opportunity to run
-      (is (== 1 (:bad-protocol @statistics))
-          "MAVlink 2 only message should fail to encode due to bad protocol")
       (let [decoded-message (encode-roundtrip {:message'id :heartbeat :mavlink'protocol :mavlink2})]
         (is decoded-message
             "Failed to send MAVlink 2 heartbeat"))
       (let [decoded-message (encode-roundtrip {:message'id :device-op-read})]
         (is decoded-message
           "Failed to send MAVlink 2 only test message"))
-      (is (== 1 (:bad-protocol @(:statistics channel)))
-          "Second attempt to send MAVlink 2 only message should pass.")
-      )
-    )
-  (testing "Roundtrip of all messages."
-    (println (str "There are " (count (vals (:messages-by-id mavlink))) " messages types."))
+      (let [decoded-message (encode-roundtrip {:message'id :heartbeat :mavlink'protocol :mavlink1})]
+        (is decoded-message
+            "Failed to accept MAVlink 1 heartbeat"))
+      ))
+  (testing "Illegal swap back to mavlink1"
+    ; Swap to mavlink2 and resend all the messages.
     (reset! last-error nil)
-    (doseq [msg-info (vals (:messages-by-id mavlink))]
-        (let [message (get-test-message msg-info)
-              decoded-message (encode-roundtrip message)]
-          ; (println (str "-- Testing message " (:message'id message) " :: " message))
-          (is (compare-messages mavlink message decoded-message)
-            (str "Roundtrip failed.\n Sent msg: " message
-                 "\nReceived message: "decoded-message)))))
-
-    (is (nil? @last-error)
-        "None of the round trips should cause a failure.")
-
-    (let [statistics (:statistics channel)]
-      (println "\n\nMavlink Statistics")
-      (pprint @statistics))
+    (encode-oneway {:message'id :clj-mavlink
+                    :protocol :mavlink1})
+    (Thread/sleep 500) ; give the encode a chance to run
+    (is (= :bad-protocol (:cause (ex-data @last-error)))
+        "Encode should fail because cannot go from mavlink2 to mavlink1")
+    (reset! last-error nil)
+    (encode-oneway {:message'id :clj-mavlink
+                    :protocol :unknown-mavlink})
+    (Thread/sleep 500) ; give the encode a chance to run
+    (is (= :bad-protocol (:cause (ex-data @last-error)))
+        "Encode should fail because unknown protocol"))
   )
-

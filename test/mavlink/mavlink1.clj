@@ -92,6 +92,9 @@
 ;                                 (when (number? (field decoded-message))
 ;                                   (== (field message) (field decoded-message)))
 ;                                 (= (field message) (field decoded-message)))]]
+          (is (= (:protocol' decoded-message) :mavlink1)
+              (str "Message protocol error. Sent msg: " message
+                   "\nReceived message: " decoded-message))
           (is (compare-messages mavlink message decoded-message)
             (str "Roundtrip failed.\n Sent msg: " message
                  "\nReceived message: "decoded-message)))))

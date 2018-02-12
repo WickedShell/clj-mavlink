@@ -266,77 +266,92 @@
       ; return normally if continue
       (when @continue
         (when message
+          (if (= (:message'id message) :clj-mavlink)
+            (when-let [{new-protocol :protocol} message]
+              (case new-protocol
+                :mavlink2 (reset! protocol :mavlink2)
+                :mavlink1 (when (= @protocol :mavlink2)
+                            (when report-error
+                              (report-error (ex-info "clj-mavlink cannot go from protocol MAVLink 2 to MAVLink1"
+                                                     {:cause :bad-protocol
+                                                      :error :clj-mavlink-protocol
+                                                      :message message}))))
+                (when report-error
+                  (report-error (ex-info "clj-mavlink message specified unknown protocol"
+                                         {:cause :bad-protocol
+                                          :error :clj-mavlink-protocol
+                                          :message message})))))
           ; not shutting down and message to encode received
           ; look up the message-info based on the :message'id of the message
-          (if-let [message-info ((:message'id message)
-                                 (:messages-by-keyword mavlink))]
-            (try
-              ; calculate the sequence id then encode the message
-              ; don't update the mavlink sequence id until after message is sent
-              (let [msg-seq-id (:sequence'id message)
-                    new-seq-id (if msg-seq-id
-                                 (mod msg-seq-id 256)
-                                 (mod (inc @sequence-id) 256))]
-                (if-let [packet (case (or (:mavlink'protocol message)
-                                          @protocol)
-                                    :mavlink1
-                                      (if (>= (:msg-id message-info) 256)
-                                        (do
-                                          (swap! statistics update-in
-                                                 [:bad-protocol] inc)
-                                          (throw (ex-info "MAVlink 2 message id, current protocol is MAVLink 1"
-                                                          {:cause :bad-protocol
-                                                           :error :encode-failed
-                                                           :message message})))
-                                        (encode-mavlink1 channel new-seq-id
-                                                         message message-info))
-                                    :mavlink2
-                                      (encode-mavlink2 channel new-seq-id
-                                                       @secret-key encode-sha256
-                                                       message message-info)
-                                      )]
-                  ; message successfully encoded,
-                  (do
-                    ; write the packet out
-                    (if link-is-stream
-                      (do
-                        (.write ^OutputStream output-link ^bytes packet)
-                        (.flush ^OutputStream output-link))
-                      (async/>!! output-link packet))
-                    ;
-                    ;update the statistics
-                    (swap! statistics update-in [:messages-encoded] inc)
-                    ;
-                    ; write the tlog
-                    (when tlog-stream
-                      (locking tlog-stream
-                        (write-tlog tlog-stream packet (count ^bytes packet))))
-                    ;
-                    ; now update mavlink sequence id
-                    (vreset! sequence-id new-seq-id))
-                  ; message failed to encode due to error in encode function
-                  (do
-                    (swap! statistics update-in [:encode-failed] inc)
-                    (when report-error
-                      (report-error (ex-info "Encoding failed" 
-                                             {:cause :encode-failed
-                                              :message message}))))))
-              (catch Exception e (if report-error
-                                   (report-error (if (ex-data e)
-                                                   e
-                                                   (ex-info "Encoding exception."
-                                                            {:cause :encode-failed
-                                                             :message message
-                                                             :exception e})))
-                                   (throw e))))
-             ; message failed to encode because invalid :message'id
-             (do
-               (swap! statistics update-in [:encode-failed] inc)
-               (when report-error
-                 (report-error (ex-info "Encoding failed."
-                                        {:cause :invalid-message-id
-                                         :error :encode-failed
-                                         :message message})))))
+            (if-let [message-info ((:message'id message)
+                                   (:messages-by-keyword mavlink))]
+              (try
+                ; calculate the sequence id then encode the message
+                ; don't update the mavlink sequence id until after message is sent
+                (let [msg-seq-id (:sequence'id message)
+                      new-seq-id (if msg-seq-id
+                                   (mod msg-seq-id 256)
+                                   (mod (inc @sequence-id) 256))]
+                  (if-let [packet (case (or (:mavlink'protocol message)
+                                            @protocol)
+                                      :mavlink1
+                                        (if (>= (:msg-id message-info) 256)
+                                          (do
+                                            (swap! statistics update-in
+                                                   [:bad-protocol] inc)
+                                            (throw (ex-info "MAVlink 2 message id, current protocol is MAVLink 1"
+                                                            {:cause :bad-protocol
+                                                             :error :encode-failed
+                                                             :message message})))
+                                          (encode-mavlink1 channel new-seq-id
+                                                           message message-info))
+                                      :mavlink2
+                                        (encode-mavlink2 channel new-seq-id
+                                                         @secret-key encode-sha256
+                                                         message message-info)
+                                        )]
+                    ; message successfully encoded,
+                    (do
+                      ; write the packet out
+                      (if link-is-stream
+                        (do
+                          (.write ^OutputStream output-link ^bytes packet)
+                          (.flush ^OutputStream output-link))
+                        (async/>!! output-link packet))
+                      ;
+                      ;update the statistics
+                      (swap! statistics update-in [:messages-encoded] inc)
+                      ;
+                      ; write the tlog
+                      (when tlog-stream
+                        (locking tlog-stream
+                          (write-tlog tlog-stream packet (count ^bytes packet))))
+                      ;
+                      ; now update mavlink sequence id
+                      (vreset! sequence-id new-seq-id))
+                    ; message failed to encode due to error in encode function
+                    (do
+                      (swap! statistics update-in [:encode-failed] inc)
+                      (when report-error
+                        (report-error (ex-info "Encoding failed" 
+                                               {:cause :encode-failed
+                                                :message message}))))))
+                (catch Exception e (if report-error
+                                     (report-error (if (ex-data e)
+                                                     e
+                                                     (ex-info "Encoding exception."
+                                                              {:cause :encode-failed
+                                                               :message message
+                                                               :exception e})))
+                                     (throw e))))
+               ; message failed to encode because invalid :message'id
+               (do
+                 (swap! statistics update-in [:encode-failed] inc)
+                 (when report-error
+                   (report-error (ex-info "Encoding failed."
+                                          {:cause :invalid-message-id
+                                           :error :encode-failed
+                                           :message message}))))))
           (recur (async/<!! input-channel)))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
