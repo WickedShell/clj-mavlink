@@ -142,7 +142,7 @@
                 (write-fn payload (translate-keyword mavlink fval)))
               (dotimes [i num-missing]
                 (write-fn payload 0))))
-          (if bitmask
+          (if (and bitmask enum-type)
             (gen-encode-bitmask write-fn name-key enum-type enums-by-group)
             (fn encode-it [mavlink payload message]
               (write-fn payload (translate-keyword mavlink (get message name-key 0)))))))
