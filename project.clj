@@ -1,4 +1,4 @@
-(defproject clj-mavlink "0.1.0-SNAPSHOT"
+(defproject clj-mavlink "0.1.0"
   :description "Clojure MAVLink"
   :url "https://github.com/WickedShell/clj-mavlink"
   :license {:name "Eclipse Public License"
