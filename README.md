@@ -77,24 +77,23 @@ as well as clean up when the channel is closed.
 
 
 ``` clojure
-(reset! mavlink-channel
-        (mavlink/open-channel @mavlink-info
-                              {:protocol :mavlink1
-                               :system-id your-sysid
-                               :component-id your-component-id
-                               :link-id 0
-                               :decode-input-stream decode-input
-                               :decode-output-channel autopilot-receive
-                               :encode-input-channel autopilot-send
-                               :encode-output-link encode-output
-                               :report-error #(println "clj-mavlink error:\n" %1)
-                               :exception-handler #(println "clj-mavlink exception:\n" %1)
-                               :signing-options {:secret-key nil ; no signing
-                                                 :secret-keyset nil ; secret-keyset
-                                                 :accept-message-handler  ; log but don't accept the message
-                                                   #(log/error "clj-mavlink/accept-message:\n" %1)
-                                                 }
-                               :tlog-stream tlog-stream}))
+(mavlink/open-channel @mavlink-info
+                      {:protocol :mavlink1
+                       :system-id your-sysid
+                       :component-id your-component-id
+                       :link-id 0
+                       :decode-input-stream decode-input
+                       :decode-output-channel autopilot-receive
+                       :encode-input-channel autopilot-send
+                       :encode-output-link encode-output
+                       :report-error #(println "clj-mavlink error:\n" %1)
+                       :exception-handler #(println "clj-mavlink exception:\n" %1)
+                       :signing-options {:secret-key nil ; no signing
+                                         :secret-keyset nil ; secret-keyset
+                                         :accept-message-handler  ; log but don't accept the message
+                                           #(log/error "clj-mavlink/accept-message:\n" %1)
+                                         }
+                       :tlog-stream tlog-stream})
 ```
 
 See the `mavlink/open-channel` doc string for more information on the options.
