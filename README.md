@@ -1,6 +1,7 @@
 # clj-mavlink
 
 [![Build Status](https://semaphoreci.com/api/v1/wickedshell/clj-mavlink/branches/master/badge.svg)](https://semaphoreci.com/wickedshell/clj-mavlink)
+[![Clojars Project](https://img.shields.io/clojars/v/clj-mavlink.svg)](https://clojars.org/clj-mavlink)
 
 Clojure [MAVLink](https://mavlink.io/en/) bindings.
 
