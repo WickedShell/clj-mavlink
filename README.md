@@ -2,7 +2,7 @@
 
 [![Build Status](https://semaphoreci.com/api/v1/wickedshell/clj-mavlink/branches/master/badge.svg)](https://semaphoreci.com/wickedshell/clj-mavlink)
 
-Clojure MAVLink bindings.
+Clojure [MAVLink](https://mavlink.io/en/) bindings.
 
 ## Usage
 
@@ -14,16 +14,16 @@ Add the following to your `project.clj` dependencies:
 
 ### Using the library
 
-Pull in the mavlink.core, for example
+Pull in the `mavlink.core`, for example
 
 ```
 (:require [mavlink.core :as mavlink])
 ```
 
-`clj-mavlink` builds a mavlink interface from XML MAVLink specifications.
+`clj-mavlink` builds a MAVLink interface from XML [MAVLink specifications](https://mavlink.io/en/messages/).
 The clj-mavlink interface reads message hash maps from a clojure async channel,
-encodes them, and then writes the encoded message onto an OutputStream connected to the autopilot.
-The clj-mavlink interface reads an InputStream connected to the autopilot,
+encodes them, and then writes the encoded message onto an `OutputStream` connected to the autopilot.
+The clj-mavlink interface reads an `InputStream` connected to the autopilot,
 decodes messages, and writes the resulting message hash map to a clojure
 async channel (see clojure.core.async).
 
@@ -55,23 +55,23 @@ For example:
 
 The xml-sources is a vector of hash-maps. Each hash map specifies the name of
 the source file and the InputStream to read that file. The clj-mavlink database
-can be reused any number of times to open mavlink interfaces, i.e. channels, between
+can be reused any number of times to open MAVLink interfaces, i.e. channels, between
 the application and the autopilot.
 
 ### Opening a channel
 
 `mavlink/open-channel` establishes a communication interface between the
-autopilot and the applicaiton. `open-channel` takes a hash-map of options to configure
+autopilot and the application. `open-channel` takes a hash-map of options to configure
 the channel.
 
 For example this code open a MAVLink 1 protocol connection, encoded messages
-will use the specified system id and component id (unless it is overriden by the
+will use the specified system id and component id (unless it is overridden by the
 message hash-map), the decode input stream and encode-output-link are defined by
 the communication protocol (e.g. a serial link or TCP link). autopilot-send and
 autopilot-receive are clojure.core.async channels that the application uses to
 send message hash maps to be encoded and to receive decoded messages as message hash-maps.
 
-Note that there is set up to create all the fields needed for opening a mavlink channel,
+Note that there is set up to create all the fields needed for opening a MAVLink channel,
 as well as clean up when the channel is closed.
 
 
@@ -147,7 +147,7 @@ Note that unspecified fields will be given a value of 0.
 
 ##### system'id component'id sequence'id link'id
 
-A message can overide the default system-id, component-id, sequence-id and link-id by specifiying it as a keyword value binding in a message hash-map, for example
+A message can override the default system-id, component-id, sequence-id and link-id by specifying it as a keyword value binding in a message hash-map, for example
 
 ```
 {:message-id :heartbeat
@@ -173,12 +173,12 @@ defines what the values for the param fields are and for some of those fields, t
 is defined in an enum group.
 
 Enums can be used to bind the value of the these fields in outgoing messages. However,
-decoding cannot determine the enum group to use, if any, based on the :command. For that,
-clj-mavlink provides a function get-enum which takes a mavlink database, a group id,
-and a value and returns the enum for the vlaue in that group, or nil if it doesn't exist.
+decoding cannot determine the enum group to use, if any, based on the `:command`. For that,
+clj-mavlink provides a function get-enum which takes a MAVLink database, a group id,
+and a value and returns the enum for the value in that group, or nil if it doesn't exist.
 This gives you the option of binding the field to a value or an enum.
 You can define your own get-enum function
-to hide the mavlink database (and possibly the enum group id) from the rest of your code, for example:
+to hide the MAVLink database (and possibly the enum group id) from the rest of your code, for example:
 
 ```
 (def get-enum
@@ -188,9 +188,9 @@ to hide the mavlink database (and possibly the enum group id) from the rest of y
 
 #### Sending messages
 
-This example shows building and sending a heartbeat message. Remember,
-the system id and component id were specified in the open channel call,
-and unless specified here, the sequence id is automatically calculated and added to the message.
+This example shows building and sending a `heartbeat` message. Remember,
+the `system id` and `component id` were specified in the open channel call,
+and unless specified here, the `sequence id` is automatically calculated and added to the message.
 
 ```
 (let [msg message {:message-id :heartbeat
@@ -215,7 +215,7 @@ A message publisher is defined for the entire application based on the :message-
                                       (constantly (async/sliding-buffer 10))))
 ```
 
-When a module wishes to receive messages, it subscribes to that partiuclar message id:
+When a module wishes to receive messages, it subscribes to that particular message id:
 
 ```
 (async/sub message-publisher :heartbeat connect-heartbeat-chan)
