@@ -53,8 +53,8 @@ For example:
 
 ```
 
-The xml-sources is a vector of hash-maps. Each hash map specifies the name of
-the source file and the InputStream to read that file. The clj-mavlink database
+The `xml-sources` is a vector of hash-maps. Each hash map specifies the name of
+the source file and the `InputStream` to read that file. The clj-mavlink database
 can be reused any number of times to open MAVLink interfaces, i.e. channels, between
 the application and the autopilot.
 
@@ -114,9 +114,9 @@ See the `mavlink/open-channel` doc string for more information on the options.
 The messages will be encoded as specified in the `mavlink/open-channel` options hash-map.
 In this example, it encodes as MAVLink 1.0 messages. However, if a MAVLink 2.0 message is
 decoded, the encoding will automatically switch to MAVLink 2.0, as if the protocol had
-benn specified :mavlink2. Messages will be signed based on whether or not the :secret-key
-of the :signing-options is not nil. If a signed MAVLink 2.0 message is decoded, then the
-signature is verified by first trying the :secret-key (if it is not nil), if it doesn't verify,
+been specified `:mavlink2`. Messages will be signed based on whether or not the `:secret-key`
+of the `:signing-options` is not `nil`. If a signed MAVLink 2.0 message is decoded, then the
+signature is verified by first trying the `:secret-key` (if it is not `nil`), if it doesn't verify,
 then the keys in the secret-keyset is tried until a match is found, in which case the secret-key is 
 set to that key so that encoded messages are signed with that key. If no matching key is found
 to verify the signature, the message is dropped.
@@ -124,7 +124,7 @@ to verify the signature, the message is dropped.
 ### Messages
 
 The format of the message hash maps to send (encode and output) and received
-(input and decode). The bindings are for the message id and the fields of the message.
+(input and decode). The bindings are for the `message id` and the fields of the message.
 
 ##### message ids
 
@@ -147,7 +147,7 @@ Note that unspecified fields will be given a value of 0.
 
 ##### system'id component'id sequence'id link'id
 
-A message can override the default system-id, component-id, sequence-id and link-id by specifying it as a keyword value binding in a message hash-map, for example
+A message can override the default `system-id`, `component-id`, `sequence-id` and `link-id` by specifying it as a keyword value binding in a message hash-map, for example
 
 ```
 {:message-id :heartbeat
@@ -155,7 +155,7 @@ A message can override the default system-id, component-id, sequence-id and link
  :sequence'id 0}
 ```
 
-Note that a side effect of specifying the sequence id is to reset the last used sequence id to this
+Note that a side effect of specifying the `sequence id` is to reset the last used sequence id to this
 value. Succeeding messages sequence id's will increment from that value.
 
 #### Enumerated types
