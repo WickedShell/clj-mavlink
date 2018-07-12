@@ -53,7 +53,7 @@ For example:
 
 ```
 
-The `xml-sources` is a vector of hash-maps. Each hash map specifies the name of
+`:xml-sources` is a vector of hash-maps. Each hash map specifies the name of
 the source file and the `InputStream` to read that file. The clj-mavlink database
 can be reused any number of times to open MAVLink interfaces, i.e. channels, between
 the application and the autopilot.
@@ -66,45 +66,34 @@ the channel.
 
 For example this code open a MAVLink 1 protocol connection, encoded messages
 will use the specified system id and component id (unless it is overridden by the
-message hash-map), the decode input stream and encode-output-link are defined by
-the communication protocol (e.g. a serial link or TCP link). autopilot-send and
-autopilot-receive are clojure.core.async channels that the application uses to
+message hash-map), the `:decode-input-stream` and `encode-output-link` are defined by
+the communication protocol (e.g. a serial link or TCP link). `:autopilot-send` and
+`:autopilot-receive` are clojure.core.async channels that the application uses to
 send message hash maps to be encoded and to receive decoded messages as message hash-maps.
 
 Note that there is set up to create all the fields needed for opening a MAVLink channel,
 as well as clean up when the channel is closed.
 
 
-```
-    ; decode-input      is the InputStream from which the decoding thread
-    ;                   reads mavlink packets
-    ; autopilot-receive is the clojure.async channel for you to received
-    ;                   decoded messages from the autopilot
-    ; autopilot-send    is the clojure.async channel for you to send messages
-    ;                   to be encoded and sent to the autopilot
-    ; encode-output     is the OutputStream to which the encode thread writes
-    ;                   packets
-    ; tlog-stream       is an OutputStream that clj-mavlink should write the
-    ;                   telemetry log (or nil if no telemetry log is desired).
-    (reset! mavlink-channel
-            (mavlink/open-channel @mavlink-info
-                                  {:protocol :mavlink1
-                                   :system-id your-sysid
-                                   :component-id your-component-id
-                                   :link-id 0
-                                   :decode-input-stream decode-input
-                                   :decode-output-channel autopilot-receive
-                                   :encode-input-channel autopilot-send
-                                   :encode-output-link encode-output
-                                   :report-error #(println "clj-mavlink error:\n" %1)
-                                   :exception-handler #(println "clj-mavlink exception:\n" %1)
-                                   :signing-options {:secret-key nil ; no signing
-                                                     :secret-keyset nil ; secret-keyset
-                                                     :accept-message-handler  ; log but don't accept the message
-                                                       #(log/error "clj-mavlink/accept-message:\n"
-                                                                   %1)
-                                                     }
-                                   :tlog-stream tlog-stream}))
+``` clojure
+(reset! mavlink-channel
+        (mavlink/open-channel @mavlink-info
+                              {:protocol :mavlink1
+                               :system-id your-sysid
+                               :component-id your-component-id
+                               :link-id 0
+                               :decode-input-stream decode-input
+                               :decode-output-channel autopilot-receive
+                               :encode-input-channel autopilot-send
+                               :encode-output-link encode-output
+                               :report-error #(println "clj-mavlink error:\n" %1)
+                               :exception-handler #(println "clj-mavlink exception:\n" %1)
+                               :signing-options {:secret-key nil ; no signing
+                                                 :secret-keyset nil ; secret-keyset
+                                                 :accept-message-handler  ; log but don't accept the message
+                                                   #(log/error "clj-mavlink/accept-message:\n" %1)
+                                                 }
+                               :tlog-stream tlog-stream}))
 ```
 
 See the `mavlink/open-channel` doc string for more information on the options.
@@ -120,6 +109,18 @@ signature is verified by first trying the `:secret-key` (if it is not `nil`), if
 then the keys in the secret-keyset is tried until a match is found, in which case the secret-key is 
 set to that key so that encoded messages are signed with that key. If no matching key is found
 to verify the signature, the message is dropped.
+
+If the parser is running with MAVLink 2.0 decoding and signing keys and a MAVLink
+1.0 or MAVLink 2.0 message without a valid signing key is recieved then the
+`:accept-message-handler` in `:signing-options` is used to determine if a message
+should be accepted and emitted into the decoded message channel and tlog. The entire message
+will not have been decoded at this point, just the headers.
+
+The parser can be switched to MAVLink 2.0 only decoding by sending the following message on the outgoing channel
+``` clojure
+{:message'id :clj-mavlink
+ :protocol :mavlink2}
+```
 
 ### Messages
 
@@ -149,7 +150,7 @@ Note that unspecified fields will be given a value of 0.
 
 A message can override the default `system-id`, `component-id`, `sequence-id` and `link-id` by specifying it as a keyword value binding in a message hash-map, for example
 
-```
+``` clojure
 {:message-id :heartbeat
  :system'id 0xff
  :sequence'id 0}
@@ -180,7 +181,7 @@ This gives you the option of binding the field to a value or an enum.
 You can define your own get-enum function
 to hide the MAVLink database (and possibly the enum group id) from the rest of your code, for example:
 
-```
+``` clojure
 (def get-enum
   (memoize (fn [group-id ^long v]
              (mavlink/get-enum @mavlink-info group-id v))))
@@ -189,10 +190,11 @@ to hide the MAVLink database (and possibly the enum group id) from the rest of y
 #### Sending messages
 
 This example shows building and sending a `heartbeat` message. Remember,
-the `system id` and `component id` were specified in the open channel call,
-and unless specified here, the `sequence id` is automatically calculated and added to the message.
+the `system id` and `component id` and encoding protocol were specified in the open channel call.
+The `sequence id` is automatically calculated and added to the message.
+Any of these fields can be overridden by providing them in the message to be encoded.
 
-```
+``` clojure
 (let [msg message {:message-id :heartbeat
                    :custom-mode 0
                    :type :mav-type-gcs
@@ -209,22 +211,21 @@ uses clojure.async publish/subscribe.
 
 A message publisher is defined for the entire application based on the :message-id:
 
-```
+``` clojure
 (defonce message-publisher (async/pub autopilot-receive
-                                      :message-id
-                                      (constantly (async/sliding-buffer 10))))
+                                      :message-id))
 ```
 
 When a module wishes to receive messages, it subscribes to that particular message id:
 
-```
+``` clojure
 (async/sub message-publisher :heartbeat connect-heartbeat-chan)
 ```
 
-```
+``` clojure
 (let [msg (async/<!! connect-heartbeat-chan)]
-  ;; process the message
-)
+  ; process the message here
+  )
 ```
 
 ## License
