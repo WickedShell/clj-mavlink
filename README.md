@@ -17,7 +17,7 @@ Add the following to your `project.clj` dependencies:
 
 Pull in the `mavlink.core`, for example
 
-```
+``` clojure
 (:require [mavlink.core :as mavlink])
 ```
 
@@ -34,13 +34,13 @@ The first step is to bring the MAVLink XML files into your project.
 `mavlink/parse` takes an xml-sources specification and returns the clj-mavlink database.
 
 For example:
-```
+``` clojure
 (defonce ^:const ardupilotmega-xml "ardupilotmega.xml")
 (defonce ^:const common-xml "common.xml")
 (defonce ^:const uavionix-xml "uAvionix.xml")
 
 (defonce mavlink-info
-         (future
+         (delay
            (mavlink/parse
              {:xml-sources [{:xml-file ardupilotmega-xml
                              :xml-source (-> ardupilotmega-xmls
