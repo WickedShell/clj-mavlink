@@ -425,7 +425,7 @@
   (let [{:keys [extension-payload-size msg-key decode-fns extension-decode-fns]}
           message-info]
     ; position the buffer to the end of the payload
-    (.position buffer (+ MAVLINK2-HDR-SIZE msg-payload-size))
+    (.position buffer (int (+ MAVLINK2-HDR-SIZE msg-payload-size)))
     ; replace trimmed bytes
     (when (> extension-payload-size msg-payload-size)
       (doseq [i (range (- extension-payload-size msg-payload-size))]
