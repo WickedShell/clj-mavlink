@@ -166,15 +166,17 @@
                        :type-key type-key
                        :name-key name-key}))
       (if length
-        (fn decode-it-array [buffer message]
-          (let [new-array (reduce
-                            (fn [vr i] (conj vr (let [v (read-fn buffer)]
-                                                    (get enum-group v v))))
-                            []
-                            (range length))]
-            (assoc! message  name-key (if (= type-key :char)
-                                        (.trim (new String ^"[B" (into-array Byte/TYPE new-array)))
-                                        new-array))))
+        (let [range-length (range length)]
+          (fn decode-it-array [buffer message]
+            (let [new-array (persistent!
+                              (reduce
+                                (fn [vr i] (conj! vr (let [v (read-fn buffer)]
+                                                       (get enum-group v v))))
+                                (transient [])
+                                range-length))]
+              (assoc! message  name-key (if (= type-key :char)
+                                          (.trim (new String ^"[B" (into-array Byte/TYPE new-array)))
+                                          new-array)))))
           (fn decode-it [buffer message]
             (assoc! message name-key (let [v (if (and bitmask
                                                       (= type-key :uint64_t))
