@@ -15,17 +15,19 @@
 
 (defn- compute-checksum-bytes
   [^bytes the-bytes start-idx last-idx crc-seed]
-  (reduce
-    (fn [crc idx]
-        (update-crc crc (aget the-bytes idx)))
-    0xffff (range start-idx last-idx)))
+  (loop [crc 0xffff
+         idx start-idx]
+    (if (< idx last-idx)
+      (recur (update-crc crc (aget the-bytes idx)) (inc idx))
+      crc)))
 
 (defn- compute-checksum-byte-buffer
   [^ByteBuffer the-bytes start-idx last-idx crc-seed]
-  (reduce
-    (fn [crc idx]
-        (update-crc crc (.get the-bytes ^int idx)))
-    0xffff (range start-idx last-idx)))
+  (loop [crc 0xffff
+         idx start-idx]
+    (if (< idx last-idx)
+      (recur (update-crc crc (.get the-bytes ^int idx)) (inc idx))
+      crc)))
 
 (defn compute-checksum
   "Compute the checksum of a string and return it or of
