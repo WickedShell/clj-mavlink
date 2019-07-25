@@ -53,7 +53,7 @@
           ^long sequence-id
           message
           {:keys [encode-fns ^long payload-size crc-seed
-                ^long msg-id msg-key]}]
+                ^long msg-id]}]
   {:pre [(<= 0 msg-id 255)   ; mavlink 1.0 only
          (instance? Long system-id)
          (instance? Long component-id)
@@ -150,13 +150,13 @@
    message-info - the mavlink message information
   "
   ^bytes [{:keys [mavlink system-id component-id
-                  link-id encode-timestamp] :as channel}
+                  link-id encode-timestamp]}
           sequence-id
           secret-key
           ^MessageDigest encode-sha256
           message
           {:keys [encode-fns extension-encode-fns ^long extension-payload-size
-                  crc-seed ^long msg-id msg-key]}]
+                  crc-seed ^long msg-id]}]
   {:pre [(<= 0 msg-id 16777215)
          (instance? Long system-id)
          (instance? Long component-id)
@@ -422,13 +422,13 @@
    msg-payload-size
    statistics
    ]
-  (let [{:keys [extension-payload-size msg-key decode-fns extension-decode-fns]}
+  (let [{:keys [extension-payload-size decode-fns extension-decode-fns]}
           message-info]
     ; position the buffer to the end of the payload
     (.position buffer (int (+ MAVLINK2-HDR-SIZE msg-payload-size)))
     ; replace trimmed bytes
     (when (> extension-payload-size msg-payload-size)
-      (doseq [i (range (- extension-payload-size msg-payload-size))]
+      (dotimes [_ (- extension-payload-size msg-payload-size)]
         (.put buffer (byte 0))))
     ; position the buffer at the start of the payload
     (.position buffer MAVLINK2-HDR-SIZE)
@@ -781,34 +781,32 @@
    statistics]
   (let [bytes-to-read (+ payload-size 2)]
     (when (read-bytes statistics input-stream buffer bytes-to-read)
-      (let [{:keys [crc-seed]} message-info]
-        (if (verify-checksum buffer
-                             (:crc-seed message-info) 
-                             ; compute checksum LSB
-                             (+ MAVLINK1-HDR-SIZE payload-size))
-          (if (or (= @protocol :mavlink1)
-                  (and (= @protocol :mavlink2)
-                       (when-let [accept-message-handler (:accept-message-handler (:signing-options channel))]
-                         (accept-message-handler (assoc message :current'protocol @protocol)))))
-            (do
-              ; decode and output the message
-              (async/>!! output-channel
-                         (decode-mavlink1 message
-                                          (:decode-fns message-info)
-                                          buffer
-                                          statistics))
-              ; write telemetry log
-              (when tlog-stream
-                (locking tlog-stream
-                  (write-tlog tlog-stream
-                              (.array ^ByteBuffer buffer)
-                              (+ MAVLINK1-HDR-CRC-SIZE payload-size))))
-              ;
-              ; update statistics
-              (swap! statistics update-in
-                     [:bytes-decoded] #(+ % MAVLINK1-HDR-SIZE bytes-to-read)))
-            (swap! statistics update-in [:bad-protocol] inc))
-          (swap! statistics update-in [:bad-checksums] inc)))))
+      (if (verify-checksum buffer
+                           (:crc-seed message-info)
+                           ; compute checksum LSB
+                           (+ MAVLINK1-HDR-SIZE payload-size))
+        (if (or (= @protocol :mavlink1)
+                (and (= @protocol :mavlink2)
+                     (when-let [accept-message-handler (:accept-message-handler (:signing-options channel))]
+                       (accept-message-handler (assoc message :current'protocol @protocol)))))
+          (do
+            ; decode and output the message
+            (async/>!! output-channel
+                       (decode-mavlink1 message
+                                        (:decode-fns message-info)
+                                        buffer
+                                        statistics))
+            ; write telemetry log
+            (when tlog-stream
+              (locking tlog-stream
+                (write-tlog tlog-stream
+                            (.array ^ByteBuffer buffer)
+                            (+ MAVLINK1-HDR-CRC-SIZE payload-size))))
+            ; update statistics
+            (swap! statistics update-in
+                   [:bytes-decoded] #(+ % MAVLINK1-HDR-SIZE bytes-to-read)))
+          (swap! statistics update-in [:bad-protocol] inc))
+        (swap! statistics update-in [:bad-checksums] inc))))
   ; always return function to execute start-state
   #(start-state channel buffer input-stream output-channel statistics))
 
@@ -904,7 +902,7 @@
 (defn get-description
   "Return the description, only useful if descriptions were saved.
    Otherwise nil is returned."
-  [{:keys [descriptions] :as mavlink} msg-key]
+  [{:keys [descriptions]} msg-key]
   (when descriptions
     (msg-key descriptions)))
 
@@ -945,7 +943,7 @@
                               enumerated value
     :unknown-type           - unknown type specifier in an XML file
   "
-  [{:keys [descriptions xml-sources] :as options}]
+  [{:keys [xml-sources] :as options}]
   {:pre [(pos? (count xml-sources))]}
    (let [parsed (get-xml-zippers xml-sources)
          mavlink
@@ -1076,7 +1074,7 @@
                    report-error
                    signing-options
                    system-id
-                   tlog-stream] :as options}]
+                   tlog-stream]}]
   {:pre [(instance? Long system-id)
          (instance? Long component-id)
          (instance? InputStream decode-input-stream)

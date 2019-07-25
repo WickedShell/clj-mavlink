@@ -124,7 +124,7 @@
 (defn gen-encode-fn
   "Generate the encode function for a field. Because they have the same structure
    this function works on both regular fields and extension fields."
-  [{:keys [name-key type-key enum-type length bitmask] :as field} enums-by-group]
+  [{:keys [name-key type-key enum-type length bitmask]} enums-by-group]
   (let [write-fn (type-key write-payload)]
     (if write-fn
       (if (and length bitmask)
@@ -156,7 +156,7 @@
    this function works on both regular fields and extension fields.
    Note that we depend on gen-encode-fn to catch bitmask errors, there is no need
    to catch them twice."
-  [{:keys [name-key type-key length enum-type bitmask] :as field} enums-by-group]
+  [{:keys [name-key type-key length enum-type bitmask]} enums-by-group]
   (let [read-fn (type-key read-payload)
         enum-group (get enums-by-group enum-type)
         reverse-enum-group (clojure.set/map-invert enum-group)]
@@ -254,8 +254,8 @@
      options the parse options map, only :descriptions tag is referenced
      mavlink the mavlink map holding the :enum-to-value and :enums-group mappings"
   [{:keys [^String file-name zipper]}
-   {:keys [descriptions] :as options}
-   {:keys [enum-to-value enums-by-group]}]
+   {:keys [descriptions]} ; options
+   {:keys [enums-by-group]}]
   (let [messages-by-keyword
           (apply
             merge
