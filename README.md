@@ -10,7 +10,7 @@ Clojure [MAVLink](https://mavlink.io/en/) bindings.
 Add the following to your `project.clj` dependencies:
 
 ```
-[clj-mavlink "0.1.0"]
+[clj-mavlink "0.1.1"]
 ```
 
 ### Using the library
