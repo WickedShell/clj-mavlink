@@ -44,7 +44,8 @@
                                      {:xml-file "common.xml"
                                       :xml-source (-> "test/resources/common.xml" io/input-stream)}
                                      {:xml-file "uAvionix.xml"
-                                      :xml-source (-> "test/resources/uAvionix.xml" io/input-stream)}]}))
+                                      :xml-source (-> "test/resources/uAvionix.xml" io/input-stream)}]
+                     :retain-fields? true}))
 
 (def channel  (open-channel mavlink {:protocol :mavlink1
                                      :system-id 99

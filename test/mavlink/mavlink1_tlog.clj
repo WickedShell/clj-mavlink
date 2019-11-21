@@ -44,7 +44,8 @@
                                      {:xml-file "common.xml"
                                       :xml-source (-> "test/resources/common.xml" io/input-stream)}
                                      {:xml-file "uAvionix.xml"
-                                      :xml-source (-> "test/resources/uAvionix.xml" io/input-stream)}]}))
+                                      :xml-source (-> "test/resources/uAvionix.xml" io/input-stream)}]
+                     :retain-fields? true}))
 
 (def tlog-stream (io/output-stream "MAVLINK1.tlog"))
 

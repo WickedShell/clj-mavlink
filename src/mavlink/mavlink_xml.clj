@@ -37,6 +37,7 @@
 (defn mk-field-map
   "Given the field's values, create the map."
   [{:keys [enum name type display]}]
+  ; this map is larger then it needs to be, but we won't retain it after parsing
   {:fld-name name
    :name-key (keywordize name)
    :type-key (get-type type)
@@ -254,7 +255,7 @@
      options the parse options map, only :descriptions tag is referenced
      mavlink the mavlink map holding the :enum-to-value and :enums-group mappings"
   [{:keys [^String file-name zipper]}
-   {:keys [descriptions]} ; options
+   {:keys [descriptions retain-fields?]} ; options
    {:keys [enums-by-group]}]
   (let [messages-by-keyword
           (apply
@@ -302,19 +303,20 @@
                       ext-decode-fns (mapv #(gen-decode-fn % enums-by-group) ext-fields)
                       ]
                   {(keywordize msg-name)
-                   {:msg-id msg-id
-                    :msg-key (keywordize msg-name)
-                    :payload-size payload-size
-                    :extension-payload-size (+ payload-size payload-size-ext)
-                    :fields fields
-                    :encode-fns encode-fns
-                    :decode-fns decode-fns
-                    :extension-fields ext-fields
-                    :extension-encode-fns ext-encode-fns
-                    :extension-decode-fns ext-decode-fns
-                    :crc-seed crc-seed
-                    }
-                  }))))
+                   (let [basic {:msg-id msg-id
+                                :msg-key (keywordize msg-name)
+                                :payload-size payload-size
+                                :extension-payload-size (+ payload-size payload-size-ext)
+                                :encode-fns encode-fns
+                                :decode-fns decode-fns
+                                :extension-encode-fns ext-encode-fns
+                                :extension-decode-fns ext-decode-fns
+                                :crc-seed crc-seed
+                                }]
+                     (if retain-fields?
+                       (merge  basic {:fields fields
+                                      :extension-fields ext-fields})
+                       basic))}))))
        all-descriptions
          (when descriptions
            (apply

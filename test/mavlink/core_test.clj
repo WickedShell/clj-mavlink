@@ -61,7 +61,8 @@
                                      {:xml-file "common.xml"
                                       :xml-source (-> "test/resources/common.xml" io/input-stream)}
                                      {:xml-file "uAvionix.xml"
-                                      :xml-source (-> "test/resources/uAvionix.xml" io/input-stream)}]}))
+                                      :xml-source (-> "test/resources/uAvionix.xml" io/input-stream)}]
+                     :retain-fields? true}))
 
 (def channel  (open-channel mavlink {:protocol :mavlink1
                                      :system-id 99
@@ -158,6 +159,7 @@
     (let [mavlink-simple (parse
                         {:xml-sources [{:xml-file "test-parse.xml"
                                         :xml-source (-> "test/resources/test-parse.xml" io/input-stream)}]
+                         :retain-fields? true
                          :descriptions true})]
       (is (thrown-with-msg? Exception #"Enum values conflict" 
                   (parse
@@ -227,7 +229,7 @@
       (is (= (get (:mav-autopilot (:enums-by-group mavlink-simple)) 1) :mav-autopilot-reserved)
           "Fetching of enum by its value from enums-by-group failed.")
       (is (= (:fld-name (get (:fields (:heartbeat (:messages-by-keyword mavlink-simple))) 3))
-               "base_mode")
+             "base_mode")
           "Fetching type of base-mode from heartbeat messages-by-keyword failed.")
       (is (= (:msg-id (:gps-status (:messages-by-keyword mavlink-simple))) 25)
           "Fetching id of message from messages-by-keyword failed")
