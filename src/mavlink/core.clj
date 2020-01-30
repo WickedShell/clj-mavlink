@@ -26,15 +26,17 @@
 (defonce ^:const BUFFER-SIZE (+ MAVLINK2-HDR-CRC-SIGN-SIZE 256))
 (defonce ^:const ONE-MINUTE 6000000)
 
+(defonce ^:const start-bytes #{MAVLINK1-START-BYTE MAVLINK2-START-BYTE})
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Telemetry Log functions
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defmacro write-tlog
   "Write timestamp and packet to DataOutputStream."
-  [tlog packet length]
+  [tlog packet length timestamp]
   `(do
-     (.writeLong ~tlog (quot (System/nanoTime) 1000))
+     (.writeLong ~tlog (or ~timestamp (quot (System/nanoTime) 1000)))
      (.write ~tlog ~packet 0 ~length)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -325,7 +327,7 @@
                       ; write the tlog
                       (when tlog-stream
                         (locking tlog-stream
-                          (write-tlog tlog-stream packet (count ^bytes packet))))
+                          (write-tlog tlog-stream packet (count ^bytes packet) nil)))
                       ;
                       ; now update mavlink sequence id
                       (vreset! sequence-id new-seq-id))
@@ -683,7 +685,7 @@
             ; trimmed zero bytes in the buffer, overwriting the packet as received.
             (when tlog-stream
               (locking tlog-stream
-                (write-tlog tlog-stream (.array ^ByteBuffer buffer) bytes-in-message)))
+                (write-tlog tlog-stream (.array ^ByteBuffer buffer) bytes-in-message (:timestamp' message))))
             ;
             ; decode and output the message
             (async/>!! output-channel
@@ -698,6 +700,7 @@
             (swap! statistics update-in [:bytes-decoded] #(+ bytes-in-message %))))
         ; update statistics on messages dropped due to bad checksums
         (swap! statistics update-in [:bad-checksums] inc)))
+
       ; regardless of what happened, go to the start state
       #(start-state channel buffer input-stream output-channel statistics)))
 
@@ -728,7 +731,7 @@
    ^ByteBuffer buffer
    ^InputStream input-stream
    output-channel
-   statistics]
+   statistics timestamp]
   (when (read-bytes statistics input-stream buffer (dec MAVLINK2-HDR-SIZE))
     ; now verify the header bytes
     (let [low-byte (byte-to-long (new Long (.get buffer 7)))
@@ -745,7 +748,8 @@
                                  (byte-to-long (new Long (.get buffer 1)))
                                  input-stream
                                  output-channel 
-                                 {:message'id (:msg-key message-info)
+                                 {:timestamp' timestamp
+                                  :message'id (:msg-key message-info)
                                   :protocol' :mavlink2
                                   :sequence'id
                                     (byte-to-long (new Long (.get buffer 4)))
@@ -790,23 +794,25 @@
                      (when-let [accept-message-handler (:accept-message-handler (:signing-options channel))]
                        (accept-message-handler (assoc message :current'protocol @protocol)))))
           (do
+            ; write telemetry log
+            (when tlog-stream
+              (locking tlog-stream
+                (write-tlog tlog-stream
+                            (.array ^ByteBuffer buffer)
+                            (+ MAVLINK1-HDR-CRC-SIZE payload-size)
+                            (:timestamp' message))))
             ; decode and output the message
             (async/>!! output-channel
                        (decode-mavlink1 message
                                         (:decode-fns message-info)
                                         buffer
                                         statistics))
-            ; write telemetry log
-            (when tlog-stream
-              (locking tlog-stream
-                (write-tlog tlog-stream
-                            (.array ^ByteBuffer buffer)
-                            (+ MAVLINK1-HDR-CRC-SIZE payload-size))))
             ; update statistics
             (swap! statistics update-in
                    [:bytes-decoded] #(+ % MAVLINK1-HDR-SIZE bytes-to-read)))
           (swap! statistics update-in [:bad-protocol] inc))
         (swap! statistics update-in [:bad-checksums] inc))))
+
   ; always return function to execute start-state
   #(start-state channel buffer input-stream output-channel statistics))
 
@@ -833,7 +839,7 @@
    ^ByteBuffer buffer
    ^InputStream input-stream
    output-channel
-  statistics]
+   statistics timestamp]
   (when (read-bytes statistics input-stream buffer (dec MAVLINK1-HDR-SIZE))
     ; now verify the header bytes
     (let [msg-id (byte-to-long (new Long (.get buffer 5)))
@@ -848,7 +854,8 @@
                                  msg-payload-size
                                  input-stream
                                  output-channel
-                                 {:message'id (:msg-key message-info)
+                                 {:timestamp' timestamp
+                                  :message'id (:msg-key message-info)
                                   :protocol' :mavlink1
                                   :sequence'id
                                     (byte-to-long (new Long (.get buffer 2)))
@@ -866,7 +873,10 @@
    is returned, which indicates the stream was closed, or a start-byte is
    returned. When the stream is closed, just return nil which stops the decoding
    state machine. Otherwise, return a function to execute the function to get
-   the header of the message (see clojure trampline documentation.
+   the header of the message (see clojure trampline documentation).
+
+   Timestamp every decoded message with the system time, unless the input stream
+   is a tlog, in which case get the timestamp from the tlog.
 
    channel - internal mavlink channel
    buffer - buffer to hold message to decode
@@ -874,22 +884,55 @@
    output-channel - channel to write decoded messages to
    statistics statistics
    "
-  [{:keys [continue] :as channel}
+  [{:keys [continue input-is-tlog?] :as channel}
    ^ByteBuffer buffer
    ^InputStream input-stream
    output-channel
    statistics]
   (.clear buffer)
-  ; return nil and stop the decode state machine "normally"
-  (when (and @continue
-             (read-bytes statistics input-stream buffer 1))
-    ; return function to select and execute the next state
-    #(condp = (.get buffer 0)
-       MAVLINK1-START-BYTE (mavlink1-header-state channel buffer
-                            input-stream output-channel statistics)
-       MAVLINK2-START-BYTE (mavlink2-header-state channel buffer
-                            input-stream output-channel statistics)
-       (start-state channel buffer input-stream output-channel statistics))))
+  (when-let [timestamp (or 
+                         (when input-is-tlog? ; read timestamp and start byte
+                           (when (read-bytes statistics input-stream buffer (inc (Long/BYTES)))
+                               (loop []
+                                 (let [sb (.get buffer (Long/BYTES))]
+                                   (if (contains? start-bytes sb)
+                                     ; get the timestamp to return, clear the buffer,
+                                     ; then put back the start byte
+                                     (let [ts (do
+                                                (.position buffer 0)
+                                                (Long/reverseBytes (.getLong buffer)))]
+                                        (.clear buffer)
+                                        (.put buffer sb)
+                                        ts)
+                                     ; didn't get the a start byte, so the timestamp isn't right either
+                                     ; shift the buffer and read another byte
+                                     (do
+                                       (doseq [i (range (Long/BYTES))]
+                                         (.put buffer i (.get buffer ^long (inc i))))
+                                       (.position buffer (Long/BYTES))
+                                       (when (read-bytes statistics input-stream buffer 1)
+                                         (recur))))))))
+                           (loop [] ; just find the start byte
+                             (.position buffer 0)
+                             (when (read-bytes statistics input-stream buffer 1)
+                               (if (contains? start-bytes (.get buffer 0))
+                                 (quot (System/nanoTime) 1000)
+                                 (recur)))))]
+    ; return nil and stop the decode state machine "normally"
+    (when (and @continue
+               timestamp)
+      ; return function to select and execute the header state
+      (condp = (.get buffer 0)
+        MAVLINK1-START-BYTE #(mavlink1-header-state channel buffer
+                             input-stream output-channel statistics timestamp)
+        MAVLINK2-START-BYTE #(mavlink2-header-state channel buffer
+                             input-stream output-channel statistics timestamp)
+        (when-let [report-error (:report-error channel)]
+          (report-error (ex-info "clj-mavlink internal error decoding"
+                                 {:cause :decode-failed
+                                  :error :start-byte-not-found
+                                  :message "Could not find start of a MAVLink message"}))
+          nil)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; End decode state machine state functions.
@@ -1064,6 +1107,7 @@
      is 0. See the sign-packet function for timestamping for encoding.
    "
   [mavlink {:keys [component-id
+                   input-is-tlog?
                    decode-input-stream
                    decode-output-channel
                    encode-input-channel
@@ -1114,6 +1158,7 @@
                              }
         continue (atom true)
         channel {:component-id component-id
+                 :input-is-tlog? input-is-tlog?
                  :encode-timestamp (atom 0) ; MAVLInk 2.0 encoding and decoding
                  :link-id (or link-id 0)    ; MAVLink 2.0, encoding only
                  :mavlink mavlink           ; returned by parse
