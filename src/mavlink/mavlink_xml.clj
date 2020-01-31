@@ -176,7 +176,7 @@
                                 (transient [])
                                 range-length))]
               (assoc! message  name-key (if (= type-key :char)
-                                          (.trim (new String ^"[B" (into-array Byte/TYPE new-array)))
+                                          (new String ^"[B" (into-array Byte/TYPE new-array))
                                           new-array)))))
           (fn decode-it [buffer message]
             (assoc! message name-key (let [v (if (and bitmask
