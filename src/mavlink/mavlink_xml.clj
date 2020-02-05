@@ -176,7 +176,12 @@
                                 (transient [])
                                 range-length))]
               (assoc! message  name-key (if (= type-key :char)
-                                          (new String ^"[B" (into-array Byte/TYPE new-array))
+                                          (loop [idx (dec (count new-array))]
+                                            (if (neg? idx)
+                                              (new String "")
+                                              (if (= (get new-array idx) \o000)
+                                                (recur (dec idx))
+                                                (new String ^"[B" (into-array Byte/TYPE (subvec new-array 0 (inc idx)))))))
                                           new-array)))))
           (fn decode-it [buffer message]
             (assoc! message name-key (let [v (if (and bitmask
