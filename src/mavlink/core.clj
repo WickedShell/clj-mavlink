@@ -294,7 +294,7 @@
                       new-seq-id (if msg-seq-id
                                    (mod msg-seq-id 256)
                                    (mod (inc @sequence-id) 256))]
-                  (if-let [packet (case (or (:mavlink'protocol message)
+                  (if-let [packet (case (or (:protocol' message)
                                             @protocol)
                                       :mavlink1
                                         (if (>= (:msg-id message-info) 256)
