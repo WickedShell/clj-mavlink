@@ -515,8 +515,8 @@
                     (System/arraycopy packet
                                       (inc start-signature-idx)
                                       (.array bb) 0 6)
-                    (.put bb 6 0)
-                    (.put bb 7 0)
+                    (.put bb 6 (byte 0))
+                    (.put bb 7 (byte 0))
                     (.getLong bb))
         start-sha256-idx (+ start-signature-idx 7)]
     (if (or (nil? tuple-timestamp)
@@ -908,7 +908,7 @@
                                      ; shift the buffer and read another byte
                                      (do
                                        (doseq [i (range (Long/BYTES))]
-                                         (.put buffer i (.get buffer ^long (inc i))))
+                                         (.put buffer (int i) (.get buffer ^long (inc i))))
                                        (.position buffer (Long/BYTES))
                                        (when (read-bytes statistics input-stream buffer 1)
                                          (recur))))))))
