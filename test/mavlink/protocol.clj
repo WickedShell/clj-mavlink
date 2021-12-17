@@ -115,13 +115,13 @@
         "None of the round trips should cause a failure."))
   (testing "automatic protocol change from MAVlink 1 to MAVlink 2"
     (let [statistics (:statistics channel)]
-      (let [decoded-message (encode-roundtrip {:message'id :heartbeat :mavlink'protocol :mavlink2})]
+      (let [decoded-message (encode-roundtrip {:message'id :heartbeat :protocol' :mavlink2})]
         (is decoded-message
             "Failed to send MAVlink 2 heartbeat"))
       (let [decoded-message (encode-roundtrip {:message'id :device-op-read})]
         (is decoded-message
           "Failed to send MAVlink 2 only test message"))
-      (let [decoded-message (encode-roundtrip {:message'id :heartbeat :mavlink'protocol :mavlink1})]
+      (let [decoded-message (encode-roundtrip {:message'id :heartbeat :protocol' :mavlink1})]
         (is decoded-message
             "Failed to accept MAVlink 1 heartbeat"))
       ))

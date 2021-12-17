@@ -99,7 +99,7 @@
       (Thread/sleep 1) ; give the encode a thread an opportunity to run
       (is (== 1 (:bad-protocol @statistics))
           "MAVlink 2 only message should fail to encode due to bad protocol")
-      (let [decoded-message (encode-roundtrip {:message'id :heartbeat :mavlink'protocol :mavlink2})]
+      (let [decoded-message (encode-roundtrip {:message'id :heartbeat :protocol' :mavlink2})]
         (is decoded-message
             "Failed to send MAVlink 2 heartbeat"))
       (let [decoded-message (encode-roundtrip {:message'id :device-op-read})]
