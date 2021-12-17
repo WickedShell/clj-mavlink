@@ -1,5 +1,5 @@
 (ns mavlink.mavlink_xml
-  (:require [clojure.data.xml :as xml]
+  (:require [clojure.xml :as xml]
             [clojure.zip :as zip]
             [clojure.data.zip.xml :as zip-xml]
             [clojure.string :as string]
