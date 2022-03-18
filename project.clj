@@ -14,4 +14,9 @@
             }
   :plugins [[perforate "0.3.4"]]
 
+  :repositories [["releases" {:url "https://repo.clojars.org"
+                            :creds :gpg}],
+                 ["snapshots" {:url "https://repo.clojars.org"
+                               :creds :gpg}]]
+
   :global-vars {*warn-on-reflection* true})
