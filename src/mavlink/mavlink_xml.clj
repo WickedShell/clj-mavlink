@@ -278,7 +278,7 @@
                                                   :input msg-id-str
                                                   :message-name msg-name}))))
                       fields (sort-fields (get-fields m))
-                      ext-fields (sort-fields (get-extension-fields m))
+                      ext-fields (get-extension-fields m) ; extensions are not sorted
                       payload-size (apply + (map #(let [{:keys [type-key length]} %]
                                                     (* (type-key type-size) (or length 1)))
                                                  fields))
@@ -305,8 +305,7 @@
                       encode-fns (mapv #(gen-encode-fn % enums-by-group) fields)
                       decode-fns (mapv #(gen-decode-fn % enums-by-group) fields)
                       ext-encode-fns (mapv #(gen-encode-fn % enums-by-group) ext-fields)
-                      ext-decode-fns (mapv #(gen-decode-fn % enums-by-group) ext-fields)
-                      ]
+                      ext-decode-fns (mapv #(gen-decode-fn % enums-by-group) ext-fields)]
                   {(keywordize msg-name)
                    (let [basic {:msg-id msg-id
                                 :msg-key (keywordize msg-name)
