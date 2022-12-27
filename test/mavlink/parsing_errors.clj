@@ -1,10 +1,10 @@
 (ns mavlink.parsing-errors
   (:require [clojure.test :refer :all]
             [clojure.java.io :as io]
-            [mavlink.core :refer :all])
-  (:import [java.nio ByteBuffer ByteOrder]))
+            [mavlink.core :refer :all]))
 
-(use 'clojure.pprint)
+; This file tests parsing errors.
+;
 
 (deftest parsing
   (testing "Testing bad.xml"

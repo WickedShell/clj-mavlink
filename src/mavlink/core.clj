@@ -1189,6 +1189,7 @@
     (.order buffer ByteOrder/LITTLE_ENDIAN)
 
     (async/thread    ; decoding thread
+      (.setName (Thread/currentThread) "Mavlink decoding")
       (try
         ; start the decoding state machine
         (trampoline start-state channel
@@ -1211,6 +1212,7 @@
                                                   :exception e})))))
 
     (async/thread    ; encoding thread
+      (.setName (Thread/currentThread) "Mavlink encoding")
       (try
         ; start encoding messages
         (encode-messages channel

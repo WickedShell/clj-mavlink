@@ -41,6 +41,7 @@
 ;; Function to read a typed value from a ByteBuffer
 (defonce read-payload
   (hash-map
+    :char-array (fn [^ByteBuffer rdr] (.get rdr)) ; Returned as a byte (-128-127 value); convert to char will cause crash
     :char     (fn [^ByteBuffer rdr] (char (.get rdr)))
     :int8_t   (fn [^ByteBuffer rdr] (.get rdr))
     :uint8_t  (fn [^ByteBuffer rdr] (bit-and (short (.get rdr)) 0xFF))

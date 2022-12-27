@@ -137,7 +137,7 @@
                          :bitmask bitmask}))
         (if length
           (fn encode-it-array [mavlink payload message]
-            (let [value (name-key message)
+            (let [value (take length (name-key message))
                   num-missing (- length (count value))]
               (doseq [fval value]
                 (write-fn payload (translate-keyword mavlink fval)))
@@ -158,7 +158,9 @@
    Note that we depend on gen-encode-fn to catch bitmask errors, there is no need
    to catch them twice."
   [{:keys [name-key type-key length enum-type bitmask]} enums-by-group]
-  (let [read-fn (type-key read-payload)
+  (let [read-fn (if (and length (= type-key :char))
+                  (:char-array read-payload)
+                  (type-key read-payload))
         enum-group (get enums-by-group enum-type)
         reverse-enum-group (clojure.set/map-invert enum-group)]
     (if-not read-fn
@@ -167,22 +169,18 @@
                        :type-key type-key
                        :name-key name-key}))
       (if length
-        (let [range-length (range length)]
-          (fn decode-it-array [buffer message]
-            (let [new-array (persistent!
-                              (reduce
-                                (fn [vr i] (conj! vr (let [v (read-fn buffer)]
-                                                       (get enum-group v v))))
-                                (transient [])
-                                range-length))]
-              (assoc! message  name-key (if (= type-key :char)
-                                          (loop [idx (dec (count new-array))]
-                                            (if (neg? idx)
-                                              (new String "")
-                                              (if (= (get new-array idx) \o000)
-                                                (recur (dec idx))
-                                                (new String ^"[B" (into-array Byte/TYPE (subvec new-array 0 (inc idx)))))))
-                                          new-array)))))
+        (fn decode-it-array [buffer message]
+            (loop [new-array (transient [])
+                   i 0]
+              (if (>= i length)
+                (let [decoded-array (persistent! new-array)]
+                  (assoc! message name-key (if (= type-key :char)
+                                             (or (first (.split (new String ^"[B" (into-array Byte/TYPE decoded-array) "UTF-8") "\u0000"))
+                                                "")
+                                             decoded-array)))
+                (let [v (read-fn buffer)]
+                  (recur (conj! new-array (get enum-group v v))
+                           (inc i))))))
           (fn decode-it [buffer message]
             (assoc! message name-key (let [v (if (and bitmask
                                                       (= type-key :uint64_t))
