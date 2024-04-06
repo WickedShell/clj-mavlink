@@ -3,9 +3,9 @@
   :url "https://github.com/WickedShell/clj-mavlink"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
-  :dependencies [[org.clojure/clojure "1.10.3"]
-                 [org.clojure/core.async "0.3.443"]
-                 [org.clojure/data.zip "1.0.0"]
+  :dependencies [[org.clojure/clojure "1.11.2"]
+                 [org.clojure/core.async "1.6.681"]
+                 [org.clojure/data.zip "1.1.0"]
                  ]
   :profiles {:dev {:dependencies [ [criterium "0.4.4"] ]
                   :java-source-paths ["test/mavlink"
